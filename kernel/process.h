@@ -55,6 +55,7 @@ void process_set_entry(process_t *process, uint64_t pc, uint64_t sp, uint64_t ps
 void process_save_context(process_t *process, const uint64_t regs[31],
                           uint64_t pc, uint64_t pstate, uint64_t sp);
 void process_load_context(const process_t *process, exception_frame_t *frame);
+void process_activate_context(const process_t *process, exception_frame_t *frame);
 void process_set_page_table(process_t *process, uint64_t *page_table);
 void process_mark_exited(process_t *process, uint64_t exit_code);
 int process_add_user_region(process_t *process, uint64_t start, uint64_t size);

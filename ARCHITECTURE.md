@@ -2,6 +2,10 @@
 
 This document describes the technical architecture of KolibriARM. It is the reference for anyone writing kernel code or drivers.
 
+Some sections describe the target architecture, not only the code that exists
+today. When the current implementation is still a smaller bootstrap version,
+the section calls that out explicitly.
+
 ---
 
 ## System Overview
@@ -17,6 +21,11 @@ There is no microkernel, no driver isolation, no capability system. This is inte
 ---
 
 ## Memory Layout
+
+Current implementation note: the kernel still runs from an identity-mapped
+lower-half address space while the EL0 demos use per-process `TTBR0_EL1` page
+tables. The higher-half `TTBR1_EL1` layout below is the target layout for the
+next stage of VM cleanup.
 
 ```
 Virtual Address Space (AArch64, 48-bit, 4KB granule)
@@ -136,17 +145,22 @@ VA[20:12]  →  PTE (Page Table Entry)        level 3
 VA[11:0]   →  Offset within page
 ```
 
-Each process has its own PGD (physical address stored in `TTBR0_EL1`). The kernel page table is shared across all processes via `TTBR1_EL1` and never changes after boot.
+Each process has its own PGD (physical address stored in `TTBR0_EL1`). The
+current QEMU bootstrap also maps the kernel and MMIO into each process table so
+EL1 can keep running after exceptions. The target design is to keep the kernel
+page table shared across all processes via `TTBR1_EL1`.
 
 ```c
 // kernel/mm/vmm.h
 
-void     vmm_init(void);
-void     vmm_map(uint64_t *pgd, uint64_t vaddr, uint64_t paddr, uint64_t flags);
-void     vmm_unmap(uint64_t *pgd, uint64_t vaddr);
+int      vmm_map_page(uint64_t *pgd, uint64_t vaddr, uint64_t paddr, uint64_t flags);
+int      vmm_map_range(uint64_t *pgd, uint64_t vaddr, uint64_t paddr,
+                       uint64_t size, uint64_t flags);
+int      vmm_unmap_page(uint64_t *pgd, uint64_t vaddr);
+int      vmm_unmap_range(uint64_t *pgd, uint64_t vaddr, uint64_t size);
 uint64_t vmm_virt_to_phys(uint64_t *pgd, uint64_t vaddr);
 uint64_t *vmm_new_table(void);          // allocates and zeros a PGD
-void     vmm_free_table(uint64_t *pgd); // frees all levels
+// Future: vmm_free_table(uint64_t *pgd) will free all levels owned by a process.
 ```
 
 **Page flags (PTE bits):**

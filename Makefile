@@ -44,6 +44,7 @@ OBJS := \
     $(BUILD_DIR)/kernel/mm/pmm.o \
     $(BUILD_DIR)/kernel/mm/vmm.o \
     $(BUILD_DIR)/kernel/process.o \
+    $(BUILD_DIR)/kernel/process_context.o \
     $(BUILD_DIR)/kernel/sched/sched.o \
     $(BUILD_DIR)/kernel/sched/switch.o \
     $(BUILD_DIR)/kernel/syscall.o \

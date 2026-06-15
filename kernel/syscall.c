@@ -2,7 +2,6 @@
 
 #include <stdint.h>
 
-#include "kernel/mm/mmu.h"
 #include "kernel/process.h"
 #include "kernel/sched/sched.h"
 #include "kernel/user_demo.h"
@@ -23,18 +22,6 @@
 #define ERR_INVAL (-7LL)
 
 #define SPSR_EL1H_MASKED 0x3c5ULL
-
-static void load_process_frame(process_t *process, exception_frame_t *frame) {
-    if (process == 0 || frame == 0) {
-        return;
-    }
-
-    if (process->page_table != 0) {
-        mmu_set_ttbr0(process->page_table);
-    }
-
-    process_load_context(process, frame);
-}
 
 static int user_range_contains(uint64_t ptr, uint64_t len) {
     return process_user_range_contains(process_current(), ptr, len);
@@ -80,7 +67,7 @@ static int sys_yield_process(exception_frame_t *frame) {
 
     next->state = PROCESS_RUNNING;
     process_set_current(next);
-    load_process_frame(next, frame);
+    process_activate_context(next, frame);
 
     return 1;
 }
@@ -103,7 +90,7 @@ static void sys_exit(exception_frame_t *frame, uint64_t code) {
     if (next != 0) {
         next->state = PROCESS_RUNNING;
         process_set_current(next);
-        load_process_frame(next, frame);
+        process_activate_context(next, frame);
         return;
     }
 

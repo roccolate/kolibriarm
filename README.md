@@ -24,7 +24,7 @@ KolibriARM is a bare-metal operating system for ARM64 (AArch64) processors, writ
 
 ## Current Status
 
-> **Pre-alpha.** The kernel boots on QEMU `virt`, brings up memory management, enables an identity-mapped MMU, runs two embedded EL0 demo processes with syscall and timer-IRQ context switches, and runs a small kernel-thread scheduler demo.
+> **Pre-alpha.** The kernel boots on QEMU `virt`, brings up memory management, enables an identity-mapped MMU, runs three embedded EL0 demo processes with syscall and timer-IRQ context switches, and runs a small kernel-thread scheduler demo. One EL0 demo intentionally faults to verify that the kernel can terminate a bad user process and continue scheduling.
 
 | Component         | Status       | Notes                                  |
 |-------------------|-------------|----------------------------------------|
@@ -35,7 +35,7 @@ KolibriARM is a bare-metal operating system for ARM64 (AArch64) processors, writ
 | IRQ dispatch      | Early        | GICv2, timer PPI, C handler table      |
 | UART driver       | Working      | PL011 TX polling, RX IRQ ring, QEMU console input echo |
 | Syscalls          | Early        | `svc #0`, `sys_exit`, `sys_yield`, `sys_getpid`, `sys_mmap`/`sys_munmap` metadata, `sys_write` |
-| Userland          | Early        | Two embedded EL0 demo processes        |
+| Userland          | Early        | Three embedded EL0 demos, including one fault-path test |
 | Framebuffer       | Early        | Linear primitives plus virtio-gpu test pattern |
 | Storage           | Early        | virtio-blk MMIO probe and sector-0 read smoke |
 | Filesystem        | Planned      | FAT32 read-only first                  |
@@ -53,7 +53,8 @@ Initial scope:
 - [x] Print `Hello from EL0` through `sys_write`, then return to the kernel through `sys_exit`.
 - [x] Move the current `kernel_main()` smoke tests behind smaller debug/demo helpers.
 - [x] Track the embedded demo with initial process-owned metadata.
-- [x] Run two embedded EL0 processes and preempt one with the timer IRQ.
+- [x] Run multiple embedded EL0 processes and preempt one with the timer IRQ.
+- [x] Convert a lower-EL memory fault into process exit while continuing to schedule.
 - [x] Route embedded EL0 programs through a tiny loader-owned image descriptor.
 - [x] Copy the embedded EL0 blob into loader-owned executable slots before entering user mode.
 - [x] Move the EL0 demo payload into `programs/` while keeping the kernel EL0 transition code separate.

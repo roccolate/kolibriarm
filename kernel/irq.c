@@ -3,7 +3,6 @@
 #include <stdint.h>
 
 #include "board.h"
-#include "kernel/mm/mmu.h"
 #include "kernel/process.h"
 #include "uart/pl011.h"
 
@@ -34,18 +33,6 @@ void irq_unregister_handler(uint32_t irq) {
 
     g_irq_handlers[irq].handler = 0;
     g_irq_handlers[irq].context = 0;
-}
-
-static void load_process_frame(process_t *process, exception_frame_t *frame) {
-    if (process == 0 || frame == 0) {
-        return;
-    }
-
-    process_load_context(process, frame);
-
-    if (process->page_table != 0) {
-        mmu_set_ttbr0(process->page_table);
-    }
 }
 
 void irq_handler_frame(exception_frame_t *frame) {
@@ -82,7 +69,7 @@ void irq_handler_frame(exception_frame_t *frame) {
 
             next->state = PROCESS_RUNNING;
             process_set_current(next);
-            load_process_frame(next, frame);
+            process_activate_context(next, frame);
         }
     }
 }

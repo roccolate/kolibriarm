@@ -2,7 +2,6 @@
 
 #include <stdint.h>
 
-#include "kernel/mm/mmu.h"
 #include "kernel/process.h"
 #include "kernel/syscall.h"
 #include "kernel/user_demo.h"
@@ -78,18 +77,6 @@ void exception_handler(uint64_t esr, uint64_t far, uint64_t elr, uint64_t kind) 
     }
 }
 
-static void load_process_frame(process_t *process, exception_frame_t *frame) {
-    if (process == 0 || frame == 0) {
-        return;
-    }
-
-    if (process->page_table != 0) {
-        mmu_set_ttbr0(process->page_table);
-    }
-
-    process_load_context(process, frame);
-}
-
 static void handle_user_fault(exception_frame_t *frame, uint64_t esr,
                               uint64_t far) {
     process_t *current = process_current();
@@ -116,7 +103,7 @@ static void handle_user_fault(exception_frame_t *frame, uint64_t esr,
     if (next != 0) {
         next->state = PROCESS_RUNNING;
         process_set_current(next);
-        load_process_frame(next, frame);
+        process_activate_context(next, frame);
         return;
     }
 

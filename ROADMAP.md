@@ -78,7 +78,7 @@ This document describes the planned development trajectory for KolibriARM. Each 
 
 **Goal:** Multiple EL0 processes can run concurrently under scheduler control. This phase proves the EL0 entry path, syscalls, timer preemption, and PCB save/restore. Fully separate process page tables are tracked explicitly in Phase 2.5.
 
-**Result:** the embedded EL0 demo now creates two process table entries with separate stacks. Timer IRQ can preempt one EL0 process, save its frame, load the next READY process, and return to EL0. `sys_yield` and `sys_exit` also switch to the next READY process when possible.
+**Result:** the embedded EL0 demo now creates multiple process table entries with separate stacks. Timer IRQ can preempt one EL0 process, save its frame, load the next READY process, and return to EL0. `sys_yield` and `sys_exit` also switch to the next READY process when possible.
 
 ### 2.0 First EL0 Hello World
 - Embedded first user program in the kernel image
@@ -126,7 +126,7 @@ Implemented so far:
 - [x] Round-robin READY process selection and ZOMBIE PCB reclamation helpers
 - [x] User memory region metadata for validating syscall buffers
 - [x] Embedded EL0 demos are allocated from the process table and reclaimed after returning to EL1
-- [x] Two EL0 demo processes can run in one kernel boot path
+- [x] Multiple EL0 demo processes can run in one kernel boot path
 
 ### 2.2 Context Switch (ASM)
 - Save/restore all AArch64 registers
@@ -166,7 +166,7 @@ Implemented so far:
 `sys_mmap` / `sys_munmap` now create and remove PTE-backed anonymous mappings for the current process. Image and stack regions still use process-owned metadata for syscall pointer validation.
 
 **Exit criteria:**
-- [x] Two EL0 processes run without corrupting each other's memory
+- [x] Multiple EL0 processes run without corrupting each other's memory
 - [x] Timer interrupt fires and switches context
 - [x] `sys_exit` cleanly reclaims process resources
 - [x] All registers correctly saved/restored across context switches
@@ -212,12 +212,12 @@ Implemented so far:
 - [x] Faulting EL0 demo intentionally touches an unmapped pointer and the scheduler continues
 
 **Exit criteria:**
-- [x] Two EL0 processes have distinct user image and stack mappings
+- [x] Multiple EL0 processes have distinct user image and stack mappings
 - [x] User writes cannot modify another process's stack or image
 - [x] `sys_mmap` / `sys_munmap` create and remove actual PTEs
 - [x] Invalid user pointers are rejected or faulted without corrupting kernel state
 - [x] Host VMM/process/user-vm tests cover the new mapping behavior
-- [x] QEMU smoke test still runs the two EL0 demos with timer preemption
+- [x] QEMU smoke test still runs the EL0 demos with timer preemption and a controlled user fault
 
 **Estimated effort:** 2–4 weeks
 
@@ -481,13 +481,52 @@ Implemented so far:
 
 ---
 
-## Long-term Vision (post v1.0)
+## Phase 9+ — Engine and Multimedia Track
+
+**Goal:** Build a compact multimedia stack on top of the filesystem, GUI,
+input, display, and audio foundations without changing the current kernel
+milestones. The detailed design lives in [ENGINE_MULTIMEDIA.md](ENGINE_MULTIMEDIA.md).
+
+The external engine proposal is accepted with adjustments:
+- Its phase numbers become post-v1.5 phases after the current Phase 8 hardware
+  work.
+- QEMU remains the primary implementation path first: `virtio-gpu`,
+  `virtio-input`, and later `virtio-sound`.
+- Raspberry Pi display/audio/input support stays behind board-specific drivers.
+- Lua or another script runtime must not live in the kernel. It can be
+  considered later as a userland/runtime library.
+- Assets move to VFS/resource-manager loading after Phase 4. Embedded bootstrap
+  assets remain acceptable until the loader and VFS path exists.
+- The first versions are scalar C with tests; NEON paths come only after the
+  behavior is stable and measured.
+
+Planned phases:
+- Phase 9: display backbone with front/back buffers, present pacing, and logical
+  resolution support.
+- Phase 10: clipped 2D primitives, blits, and bootstrap bitmap text.
+- Phase 11: unified input event queue for UART, virtio-input, and later USB HID.
+- Phase 12: PCM audio mixer and board-specific output drivers.
+- Phase 13: VFS-backed resource manager for sprites, tilemaps, fonts, and audio.
+- Phase 14: compositor refinement with dirty rectangles, cursor, and layers.
+- Phase 15: fixed-timestep interactive runtime, collision helpers, entity pools,
+  sequencer, and optional userland scripting.
+
+**Exit criteria:**
+- [ ] A demo app loads assets through VFS/resource handles
+- [ ] A moving sprite or tilemap scene renders through the compositor
+- [ ] Keyboard/gamepad-style input reaches the demo through the input layer
+- [ ] Audio can mix at least one looping track plus one sound effect
+- [ ] The demo reports frame timing and stays within the target frame budget on QEMU
+
+---
+
+## Long-term Vision
 
 - SMP support (multi-core scheduler)
 - Porting to other Cortex-A boards (Orange Pi, Rock Pi 5)
 - Dynamic library loading
 - Network stack maturity (TLS 1.3 via mbedTLS)
-- Audio driver (I2S)
+- Advanced audio codecs and hardware acceleration
 - Package format and installer
 
 ---
@@ -505,3 +544,4 @@ Implemented so far:
 | v0.7    | Filesystem + GUI basics                | 0–5      |
 | v1.0    | Usable on QEMU: shell + editor + net   | 0–7      |
 | v1.5    | Running on real RPi 4/5 hardware       | 0–8      |
+| v2.0    | Engine and multimedia runtime          | 9–15     |

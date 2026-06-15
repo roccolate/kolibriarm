@@ -2,6 +2,10 @@
 
 This document is the authoritative reference for all fixed addresses and memory regions in KolibriARM.
 
+Some virtual-memory entries describe the intended higher-half kernel layout.
+The current QEMU bootstrap still uses identity mappings for the kernel while
+EL0 demo processes run with per-process `TTBR0_EL1` page tables.
+
 ---
 
 ## Physical Memory (QEMU virt, 128 MB)
@@ -39,7 +43,7 @@ These addresses are defined by QEMU's `virt` machine and must not be used for an
 
 ## Virtual Address Space
 
-### Kernel Space (`TTBR1_EL1` — shared across all processes)
+### Kernel Space Target (`TTBR1_EL1` — shared across all processes)
 
 | Virtual Address          | Maps to (physical)     | Contents                     |
 |--------------------------|------------------------|------------------------------|
@@ -52,17 +56,25 @@ These addresses are defined by QEMU's `virt` machine and must not be used for an
 | `0xFFFF000008000000`     | `0x08000000`           | GIC MMIO (identity)          |
 | `0xFFFF00000A000000`     | `0x0A000000`           | virtio MMIO (identity)       |
 
-The kernel identity-maps all MMIO at the same offset (`0xFFFF0000_XXXXXXXX`).
-Access any device at `DEVICE_VIRT = DEVICE_PHYS | 0xFFFF000000000000`.
+Target design: the kernel maps MMIO at the same offset
+(`0xFFFF0000_XXXXXXXX`) and accesses devices at
+`DEVICE_VIRT = DEVICE_PHYS | 0xFFFF000000000000`.
+
+Current implementation: the kernel and board MMIO are identity-mapped in the
+active page tables used by the QEMU bootstrap and EL0 demo runner.
 
 ### User Space (`TTBR0_EL1` — per-process)
 
 | Virtual Address          | Contents                                  |
 |--------------------------|-------------------------------------------|
-| `0x0000000000010000`     | Process .text (loaded here by exec)       |
-| `0x0000000000100000`     | Process .data and .bss                    |
-| `0x0000000000200000`     | Process heap (grows up)                   |
-| `0x0000007FFFFF0000`     | User stack (grows down from top)          |
+| `0x0000000000400000`     | Current embedded demo image VA base       |
+| `0x0000000000800000`     | Current embedded demo stack VA base       |
+| `0x0000000100000000`     | Current anonymous `sys_mmap` arena base   |
+| `0x0000000200000000`     | Current anonymous `sys_mmap` arena limit  |
+| `0x0000000000010000`     | Target process .text loaded by `exec`     |
+| `0x0000000000100000`     | Target process .data and .bss             |
+| `0x0000000000200000`     | Target process heap (grows up)            |
+| `0x0000007FFFFF0000`     | Target user stack (grows down from top)   |
 
 The user address space top is `0x0000_7FFF_FFFF_FFFF` (canonical 48-bit limit).
 The kernel never touches TTBR0 of another process.
@@ -73,8 +85,9 @@ The kernel never touches TTBR0 of another process.
 
 ### Kernel stack (per-process, in kernel heap)
 
-Each process has a 16 KB kernel stack allocated at process creation.
-The kernel stack is used only during syscalls and interrupt handling.
+Target design: each process has a 16 KB kernel stack allocated at process
+creation. The current EL0 demo path uses the exception frame saved by the
+lower-EL vectors and does not yet allocate per-process kernel stacks.
 
 ```
 High address  ┌──────────────────────┐  ← initial SP (aligned to 16 bytes)
@@ -86,8 +99,9 @@ Low address   └─────────────────────
 
 ### User stack
 
-Default size: 1 MB, placed at the top of user space.
-Grows downward. The page below the bottom is unmapped (stack overflow detection via page fault).
+Current demo stack size: 4 KB per embedded EL0 demo. Target default size:
+1 MB, placed at the top of user space. The target stack grows downward with an
+unmapped guard page below it for overflow detection.
 
 ---
 
