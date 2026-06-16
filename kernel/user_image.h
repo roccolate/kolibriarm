@@ -32,6 +32,10 @@ int user_image_load_flat(user_image_t *image, const char *name,
                          uint64_t load_base, uint64_t load_capacity,
                          uint64_t source_base, uint64_t source_capacity,
                          uint32_t entry_index);
+int user_image_load_bootfs_flat(user_image_t *image, const char *image_name,
+                                const char *bootfs_name, uint64_t load_base,
+                                uint64_t load_capacity,
+                                uint32_t entry_index);
 int user_image_prepare_process(process_t *process, const user_image_t *image,
                                uint64_t stack_start, uint64_t stack_size,
                                uint64_t pstate);

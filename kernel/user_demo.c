@@ -19,8 +19,6 @@
 #define USER_DEMO_STACK_VA_BASE 0x0000000000800000ULL
 #define USER_DEMO_STACK_VA_STRIDE 0x0000000000010000ULL
 
-extern char __user_demo_start[];
-extern char __user_demo_end[];
 extern uint64_t user_enter_el0(uint64_t entry, uint64_t stack_top, uint64_t pstate);
 extern char user_enter_el0_return[];
 
@@ -43,30 +41,26 @@ uint64_t user_demo_return_address(void) {
 }
 
 int user_demo_prepare_images(void) {
-    uint64_t source_base = (uint64_t)(uintptr_t)__user_demo_start;
-    uint64_t source_size = (uint64_t)((uintptr_t)__user_demo_end -
-                                      (uintptr_t)__user_demo_start);
-
-    if (user_image_load_flat(&g_user_demo_images[0], "user-demo-a",
-                             (uint64_t)(uintptr_t)g_user_image_slots[0],
-                             USER_IMAGE_SLOT_SIZE, source_base, source_size,
-                             0) != 0) {
+    if (user_image_load_bootfs_flat(&g_user_demo_images[0], "user-demo-a",
+                                    "user_demo",
+                                    (uint64_t)(uintptr_t)g_user_image_slots[0],
+                                    USER_IMAGE_SLOT_SIZE, 0) != 0) {
         return -1;
     }
     g_user_demo_images[0].base = user_demo_image_vaddr(0);
 
-    if (user_image_load_flat(&g_user_demo_images[1], "user-demo-b",
-                             (uint64_t)(uintptr_t)g_user_image_slots[1],
-                             USER_IMAGE_SLOT_SIZE, source_base, source_size,
-                             1) != 0) {
+    if (user_image_load_bootfs_flat(&g_user_demo_images[1], "user-demo-b",
+                                    "user_demo",
+                                    (uint64_t)(uintptr_t)g_user_image_slots[1],
+                                    USER_IMAGE_SLOT_SIZE, 1) != 0) {
         return -1;
     }
     g_user_demo_images[1].base = user_demo_image_vaddr(1);
 
-    if (user_image_load_flat(&g_user_demo_images[2], "user-demo-fault",
-                             (uint64_t)(uintptr_t)g_user_image_slots[2],
-                             USER_IMAGE_SLOT_SIZE, source_base, source_size,
-                             2) != 0) {
+    if (user_image_load_bootfs_flat(&g_user_demo_images[2], "user-demo-fault",
+                                    "user_demo",
+                                    (uint64_t)(uintptr_t)g_user_image_slots[2],
+                                    USER_IMAGE_SLOT_SIZE, 2) != 0) {
         return -1;
     }
     g_user_demo_images[2].base = user_demo_image_vaddr(2);

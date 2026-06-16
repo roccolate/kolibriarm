@@ -2,6 +2,8 @@
 
 #include <stdint.h>
 
+#include "kernel/bootfs.h"
+
 uint64_t user_image_entry(const user_image_t *image) {
     if (image == 0 || image->base == 0 || image->size == 0 ||
         image->entry_offset >= image->size) {
@@ -67,6 +69,21 @@ int user_image_load_flat(user_image_t *image, const char *name,
     return user_image_load_copy(image, name, load_base, load_capacity,
                                 source_base, header->image_size,
                                 source_base + entry_offset);
+}
+
+int user_image_load_bootfs_flat(user_image_t *image, const char *image_name,
+                                const char *bootfs_name, uint64_t load_base,
+                                uint64_t load_capacity,
+                                uint32_t entry_index) {
+    const bootfs_file_t *file = bootfs_find(bootfs_name);
+
+    if (file == 0) {
+        return -1;
+    }
+
+    return user_image_load_flat(image, image_name, load_base, load_capacity,
+                                (uint64_t)(uintptr_t)file->data, file->size,
+                                entry_index);
 }
 
 int user_image_prepare_process(process_t *process, const user_image_t *image,

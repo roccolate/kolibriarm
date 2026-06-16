@@ -3,6 +3,8 @@
 #include "unity/unity.h"
 #include "../kernel/user_image.h"
 
+extern char __user_demo_start[];
+
 void test_user_image_entry_uses_base_plus_offset(void) {
     user_image_t image = {
         .name = "hello",
@@ -100,6 +102,23 @@ void test_user_image_load_flat_uses_header_entry_table(void) {
 
         TEST_ASSERT_EQUAL_UINT64(bytes[i], loaded[i]);
     }
+}
+
+void test_user_image_load_bootfs_flat_uses_named_boot_file(void) {
+    uint8_t loaded[128] = { 0 };
+    user_image_t image;
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)user_image_load_bootfs_flat(
+                                 &image, "bootfs-flat", "user_demo",
+                                 (uint64_t)(uintptr_t)loaded, sizeof(loaded),
+                                 0));
+    TEST_ASSERT_TRUE(image.name == (const char *)"bootfs-flat");
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(uintptr_t)loaded, image.base);
+    TEST_ASSERT_EQUAL_UINT64((uint8_t)__user_demo_start[0], loaded[0]);
+    TEST_ASSERT_EQUAL_UINT64((uint8_t)__user_demo_start[1], loaded[1]);
+    TEST_ASSERT_EQUAL_UINT64((uint8_t)__user_demo_start[2], loaded[2]);
+    TEST_ASSERT_EQUAL_UINT64((uint8_t)__user_demo_start[3], loaded[3]);
 }
 
 void test_user_image_prepare_process_rejects_invalid_inputs(void) {
@@ -200,5 +219,16 @@ void test_user_image_load_flat_rejects_invalid_headers(void) {
                                  &image, "bad-size",
                                  (uint64_t)(uintptr_t)loaded, sizeof(loaded),
                                  (uint64_t)(uintptr_t)&source, sizeof(source),
+                                 0));
+}
+
+void test_user_image_load_bootfs_flat_rejects_missing_file(void) {
+    uint8_t loaded[128] = { 0 };
+    user_image_t image;
+
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
+                             (uint64_t)user_image_load_bootfs_flat(
+                                 &image, "missing", "missing",
+                                 (uint64_t)(uintptr_t)loaded, sizeof(loaded),
                                  0));
 }

@@ -33,6 +33,8 @@ OBJS := \
     $(BUILD_DIR)/drivers/gpu/virtio_gpu.o \
     $(BUILD_DIR)/drivers/irq/gicv2.o \
     $(BUILD_DIR)/drivers/storage/virtio_blk.o \
+    $(BUILD_DIR)/kernel/boot_program.o \
+    $(BUILD_DIR)/kernel/bootfs.o \
     $(BUILD_DIR)/kernel/dtb.o \
     $(BUILD_DIR)/kernel/exception_vectors.o \
     $(BUILD_DIR)/kernel/exceptions.o \
@@ -49,10 +51,12 @@ OBJS := \
     $(BUILD_DIR)/kernel/sched/switch.o \
     $(BUILD_DIR)/kernel/syscall.o \
     $(BUILD_DIR)/kernel/timer/timer.o \
+    $(BUILD_DIR)/kernel/tmpfs.o \
     $(BUILD_DIR)/kernel/user_demo.o \
     $(BUILD_DIR)/kernel/user_entry.o \
     $(BUILD_DIR)/kernel/user_image.o \
     $(BUILD_DIR)/kernel/user_vm.o \
+    $(BUILD_DIR)/kernel/vfs.o \
     $(USER_DEMO_BLOB_OBJ) \
     $(BUILD_DIR)/drivers/uart/pl011.o
 

@@ -343,15 +343,23 @@ Implemented so far:
 **Goal:** Persistent storage and inter-process communication.
 
 ### 4.0 Boot Program Store / tmpfs Seed
-- Register embedded flat user images by name
-- Expose a tiny read-only bootfs or tmpfs seed for loader tests
-- Spawn a program by name before FAT32 exists
+- [x] Register embedded flat user images by name
+- [x] Route the boot-time EL0 demo lookup through the named program registry
+- [x] Keep the registry fixed-size and allocation-free
+- [x] Expose a tiny read-only bootfs seed for loader tests
+- [x] Spawn a program by name before FAT32 exists
 - Keep FAT32 as the next storage-backed source for the same loader path
 
 ### 4.1 Virtual Filesystem (VFS)
+- [x] Minimal fixed-size VFS node table with exact path lookup
+- [x] Read dispatch through node-owned callbacks
+- [x] Read-only bootfs seed can mount at `/boot/user_demo`
+- [x] Fixed-size VFS descriptor table with `open`, sequential `read`, and `close`
+- [x] Descriptor `seek` and path `stat`
+- [x] Fixed-size in-memory tmpfs create/read/write/delete foundation
 - Minimal VFS layer with mount points
-- File operations: `open`, `close`, `read`, `write`, `seek`, `stat`
-- In-memory tmpfs for early userland
+- File operations: `write`
+- In-memory tmpfs VFS mount for early userland
 
 ### 4.2 FAT32 Driver
 - Read-only FAT32 on top of virtio-blk
@@ -364,10 +372,10 @@ Implemented so far:
 - Inspired by KolibriOS's IPC model: simple, no sockets needed initially
 
 **Exit criteria:**
-- [ ] Can spawn a named flat user image through bootfs/tmpfs
+- [x] Can spawn a named flat user image through bootfs/tmpfs
 - [ ] Can load and execute a binary from FAT32 image
 - [ ] Two processes exchange messages without kernel crash
-- [ ] tmpfs supports create/read/write/delete
+- [x] tmpfs supports create/read/write/delete
 
 **Estimated effort:** 4–6 weeks
 
