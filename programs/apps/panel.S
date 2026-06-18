@@ -218,9 +218,19 @@ panel_fail:
     mov x0, #1
     adr x1, panel_fail_msg
     bl common_write_cstr
-    mov x0, #1
-    mov x8, #SYS_EXIT
+    // Instead of exiting, park the panel in a yield loop so the
+    // kernel debug console (k>) gets a chance to run once the user
+    // demo hands the CPU back. This keeps the process table populated
+    // for 'ps' / 'proclist' queries even when GUI setup fails.
+    mov x0, #0
+    mov x8, #SYS_GETPID
     svc #0
+    mov x19, x0                         // panel_pid (still useful for k> output)
+panel_fail_loop:
+    mov x0, #0
+    mov x8, #SYS_YIELD
+    svc #0
+    b panel_fail_loop
 
 // panel_redraw_all: redraw the panel background, top border, and all buttons.
 panel_redraw_all:

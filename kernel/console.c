@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 
+#include "drivers/input/input.h"
 #include "kernel/gui.h"
 #include "kernel/mm/pmm.h"
 #include "kernel/process.h"
@@ -18,6 +19,12 @@ static int g_have_memory;
 static int g_storage_ready;
 static int g_framebuffer_ready;
 static int g_interactive;
+// Last known absolute cursor position, used to synthesize relative
+// mouse_move events when the user drives the mouse from the serial
+// console. Initialized on the first cursor query.
+static int g_cursor_known;
+static int32_t g_cursor_x;
+static int32_t g_cursor_y;
 
 static int streq(const char *a, const char *b) {
     while (*a != '\0' && *b != '\0') {
@@ -65,6 +72,9 @@ static void print_prompt(void) {
 
 static void run_help(void) {
     uart_puts("commands: help mem ps ticks storage fb\n");
+    uart_puts("          mouse <x> <y>   move cursor\n");
+    uart_puts("          click <x> <y>   left-click at cursor\n");
+    uart_puts("          key <c>         inject one ASCII key press\n");
 }
 
 static void run_mem(void) {
@@ -121,6 +131,126 @@ static void run_status(const char *name, int ready) {
     uart_puts(ready != 0 ? ": ready\n" : ": absent\n");
 }
 
+// Read the current cursor position into *x/*y. Falls back to (0,0) if
+// the GUI desktop is not yet up.
+static void read_cursor(int32_t *x, int32_t *y) {
+    gui_desktop_t *desktop = gui_demo_desktop();
+    if (desktop != 0) {
+        gui_get_cursor(desktop, x, y);
+        return;
+    }
+    *x = 0;
+    *y = 0;
+}
+
+static void queue_mouse_move(int32_t to_x, int32_t to_y) {
+    if (g_cursor_known == 0) {
+        read_cursor(&g_cursor_x, &g_cursor_y);
+        g_cursor_known = 1;
+    }
+    int32_t dx = to_x - g_cursor_x;
+    int32_t dy = to_y - g_cursor_y;
+    g_cursor_x = to_x;
+    g_cursor_y = to_y;
+    input_event_t event = {0};
+    event.type = INPUT_EVENT_MOUSE_MOVE;
+    event.data.mouse_move.dx = dx;
+    event.data.mouse_move.dy = dy;
+    (void)input_queue_push(&event);
+}
+
+static void queue_mouse_button(uint32_t button, uint32_t pressed) {
+    input_event_t event = {0};
+    event.type = INPUT_EVENT_MOUSE_BUTTON;
+    event.data.mouse_button.button = button;
+    event.data.mouse_button.pressed = pressed;
+    (void)input_queue_push(&event);
+}
+
+static void queue_key_press(uint32_t key) {
+    input_event_t event = {0};
+    event.type = INPUT_EVENT_KEY_PRESS;
+    event.data.key.key = key;
+    (void)input_queue_push(&event);
+}
+
+static int parse_signed(const char *s, int32_t *out) {
+    int negative = 0;
+    if (*s == '-') {
+        negative = 1;
+        s++;
+    }
+    if (*s < '0' || *s > '9') {
+        return -1;
+    }
+    uint32_t value = 0;
+    while (*s >= '0' && *s <= '9') {
+        value = value * 10U + (uint32_t)(*s - '0');
+        s++;
+    }
+    *out = negative ? -(int32_t)value : (int32_t)value;
+    return 0;
+}
+
+static void run_mouse(int32_t x, int32_t y) {
+    queue_mouse_move(x, y);
+    uart_puts("mouse ");
+    print_dec64((uint64_t)x);
+    uart_puts(" ");
+    print_dec64((uint64_t)y);
+    uart_puts("\n");
+}
+
+static void run_click(int32_t x, int32_t y) {
+    queue_mouse_move(x, y);
+    queue_mouse_button(0, 1);
+    queue_mouse_button(0, 0);
+    uart_puts("click ");
+    print_dec64((uint64_t)x);
+    uart_puts(" ");
+    print_dec64((uint64_t)y);
+    uart_puts("\n");
+}
+
+static void run_key(char c) {
+    queue_key_press((uint32_t)(uint8_t)c);
+    uart_puts("key ");
+    uart_putc(c);
+    uart_puts("\n");
+}
+
+static void run_two_arg(const char *line, const char *cmd,
+                      void (*handler)(int32_t, int32_t)) {
+    const char *args = line;
+    while (*args != '\0' && *args != ' ') {
+        args++;
+    }
+    if (*args == ' ') {
+        args++;
+    }
+    int32_t a = 0;
+    int32_t b = 0;
+    if (parse_signed(args, &a) != 0) {
+        uart_puts("usage: ");
+        uart_puts(cmd);
+        uart_puts(" <x> <y>\n");
+        return;
+    }
+    while (*args != '\0' && *args != ' ') {
+        args++;
+    }
+    if (*args == ' ') {
+        args++;
+    }
+    if (parse_signed(args, &b) != 0) {
+        uart_puts("usage: ");
+        uart_puts(cmd);
+        uart_puts(" <x> <y>\n");
+        return;
+    }
+    handler(a, b);
+}
+
 static void run_command(const char *line) {
     if (line[0] == '\0') {
         return;
@@ -138,6 +268,15 @@ static void run_command(const char *line) {
         run_status("storage", g_storage_ready);
     } else if (streq(line, "fb")) {
         run_status("fb", g_framebuffer_ready);
+    } else if (line[0] == 'm' && line[1] == 'o' && line[2] == 'u' &&
+               line[3] == 's' && line[4] == 'e' && line[5] == ' ') {
+        run_two_arg(line, "mouse", run_mouse);
+    } else if (line[0] == 'c' && line[1] == 'l' && line[2] == 'i' &&
+               line[3] == 'c' && line[4] == 'k' && line[5] == ' ') {
+        run_two_arg(line, "click", run_click);
+    } else if (line[0] == 'k' && line[1] == 'e' && line[2] == 'y' &&
+               line[3] == ' ' && line[4] != '\0' && line[5] == '\0') {
+        run_key(line[4]);
     } else {
         uart_puts("unknown command: ");
         uart_puts(line);

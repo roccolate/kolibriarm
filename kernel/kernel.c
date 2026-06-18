@@ -335,7 +335,7 @@ static void init_input(void) {
 }
 
 static void start_scheduler_demo(void) {
-    (void)console_input_thread;
+    (void)sched_create_kernel_thread(console_input_thread, 0, "kconsole");
     sched_start();
 }
 
