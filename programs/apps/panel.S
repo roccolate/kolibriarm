@@ -326,14 +326,13 @@ panel_label_ptr:
 
 // panel_redraw_running: paint each running-apps slot. Empty slots show
 // the dim COL_RUN_BG color; populated slots show the brighter
-// COL_RUN_ACTIVE color and the app name centered. The panel frame
-// base is at x29+16 here (panel_start stp'd x29/x30 then sub'd).
+// COL_RUN_ACTIVE color and the app name centered.
 panel_redraw_running:
+    mov x28, sp                         // x28 = caller's sp (panel frame base + 16)
     stp x29, x30, [sp, #-16]!
     mov x29, sp
     sub sp, sp, #48
-
-    add x28, x29, #16                   // x28 = panel frame base
+    add x28, x28, #16                   // x28 = panel frame base (original sp - 16)
 
     mov x26, #0                         // slot index
 panel_run_slot_loop:
@@ -371,13 +370,14 @@ panel_run_slot_loop:
     ldr x11, [x10]
     cbz x11, 2f
 
-    // The name is stored just past the slot table. panel_refresh_running
-    // packs each name in a fixed 16-byte area per slot. Compute its
-    // address relative to the panel frame base.
-    add x10, x28, #OFF_RUNNING + (RUN_SLOT_COUNT * RUNNING_STRIDE)
+    // Build the name buffer pointer (callee-saved x25 holds panel_pid
+    // in panel_poll; here we use it as a scratch slot to hand the
+    // pointer to panel_strlen without trusting x10 across a bl).
+    add x25, x28, #OFF_RUNNING + (RUN_SLOT_COUNT * RUNNING_STRIDE)
     mov x12, #16
     mul x12, x12, x26
-    add x10, x10, x12
+    add x25, x25, x12
+    mov x0, x25
     bl panel_strlen                     // x0 = strlen(name)
     mov x13, #6
     mul x13, x13, x0                    // text width in px
@@ -389,7 +389,7 @@ panel_run_slot_loop:
     add x2, x2, #8                      // baseline ≈ y+8 in 24 px tall row
     movz x3, #0xffC0, lsl #16
     movk x3, #0xD0E0
-    mov x4, x10
+    mov x4, x25
     mov x0, x19
     mov x8, #SYS_WINDOW_DRAW_TEXT
     svc #0
