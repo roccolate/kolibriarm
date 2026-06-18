@@ -1,41 +1,79 @@
 // KolibriARM app: panel
 //
 // Draws a taskbar at the bottom of the screen with one launcher button
-// per registered app. On click, sys_spawn the app. Used as the entry
-// point for the Phase 10.3 "panel + click-to-launch" milestone.
+// per registered app and a running-apps row underneath. On click:
+//   - if y is inside the launcher button row, sys_spawn the app behind
+//     that button.
+//   - if y is inside the running-apps row, raise the first window owned
+//     by the running pid behind that slot via SYS_WINDOW_FOCUS.
+//
+// The running-apps table is rebuilt periodically by polling
+// SYS_PROCLIST and resolving each pid through SYS_WINDOW_FOR_PID. The
+// panel itself is filtered out by comparing pid against sys_getpid().
+// This implements the Phase 10.3 exit criterion "the taskbar shows
+// running apps by pid; clicking an entry raises its window".
 
 #define SYS_EXIT         1
 #define SYS_YIELD        2
 #define SYS_GETPID       3
 #define SYS_WRITE       43
 #define SYS_SPAWN        4
+#define SYS_PROCLIST   102
 #define SYS_WINDOW_CREATE    70
 #define SYS_WINDOW_DRAW_RECT 73
 #define SYS_WINDOW_DRAW_TEXT 72
 #define SYS_WINDOW_REDRAW    76
 #define SYS_WINDOW_EVENT     74
 #define SYS_WINDOW_DESTROY  71
+#define SYS_WINDOW_FOCUS     77
+#define SYS_WINDOW_FOR_PID   78
 
 // Geometry constants for a 640x480 virtio-gpu framebuffer.
 .equ SCREEN_W,      640
 .equ SCREEN_H,      480
-.equ PANEL_H,       32
-.equ PANEL_Y,       (SCREEN_H - PANEL_H)        // 448
+.equ PANEL_H,       56
+.equ PANEL_Y,       (SCREEN_H - PANEL_H)        // 424
 .equ BTN_H,         24
-.equ BTN_Y,         (PANEL_Y + 4)               // 452
+.equ BTN_Y,         (PANEL_Y + 4)               // 428
 .equ BTN_W,         80
 .equ BTN_GAP,       8
 .equ BTN_COUNT,     8
 
-// Colors (BGRA in little-endian: 0xAABBGGRR).
-.equ COL_BG,        0xff202428
-.equ COL_BORDER,    0xff808080
-.equ COL_BTN_BG,    0xff3a4658
-.equ COL_BTN_HI,    0xff5870a0
-.equ COL_BTN_TXT,   0xffe0e8f0
-.equ COL_TITLE_TXT, 0xff8090a0
+// Running-apps row sits below the buttons. RUN_ROW_Y is panel-local.
+.equ RUN_ROW_Y,     32
+.equ RUN_ROW_H,     (PANEL_H - RUN_ROW_Y)       // 24
+.equ RUN_SLOT_W,    150
+.equ RUN_SLOT_GAP,  4
+.equ RUN_SLOT_COUNT, 4
+// Background pollig cadence: refresh once every REFRESH_PERIOD loop
+// iterations so each poll costs us only ~1% of CPU.
+.equ REFRESH_PERIOD, 100
 
-#define EVENT_CAP 8
+// Layout offsets within the panel stack frame (set up in panel_start).
+.equ OFF_RUNNING,    0
+.equ RUNNING_STRIDE, 8                       // {pid, window_id}
+.equ OFF_NAMES,      (RUN_SLOT_COUNT * 8)    // 32, 16-byte slots
+.equ NAME_STRIDE,    16
+.equ OFF_PROCLIST,   (OFF_NAMES + RUN_SLOT_COUNT * NAME_STRIDE)  // 96
+.equ PROC_STRIDE,    24
+.equ PROCLIST_MAX,   8
+.equ OFF_PROCLIST_END, (OFF_PROCLIST + PROCLIST_MAX * PROC_STRIDE) // 288
+.equ OFF_EVENTS,     OFF_PROCLIST_END        // 288
+.equ EVENT_CAP,      8
+.equ OFF_EVENTS_END, (OFF_EVENTS + EVENT_CAP * 12) // 384
+.equ OFF_YIELD_CTR,  OFF_EVENTS_END          // 384
+.equ FRAME_BYTES,    (OFF_YIELD_CTR + 16)     // 400, round up
+
+// Colors (BGRA in little-endian: 0xAABBGGRR).
+.equ COL_BG,         0xff202428
+.equ COL_BORDER,     0xff808080
+.equ COL_BTN_BG,     0xff3a4658
+.equ COL_BTN_HI,     0xff5870a0
+.equ COL_BTN_TXT,    0xffe0e8f0
+.equ COL_TITLE_TXT,  0xff8090a0
+.equ COL_RUN_BG,     0xff182028
+.equ COL_RUN_ACTIVE, 0xff506880
+.equ COL_RUN_TXT,    0xffc0d0e0
 
 .section .user.image.header, "a"
 .global panel_image_header
@@ -61,7 +99,15 @@ panel_image_header:
 panel_start:
     stp x29, x30, [sp, #-16]!
     mov x29, sp
-    sub sp, sp, #160          // 8 events * 12 bytes + slack
+    sub sp, sp, #FRAME_BYTES
+
+    // Zero the running-apps table so empty slots are easy to detect.
+    mov x9, #OFF_RUNNING
+    mov x10, #RUN_SLOT_COUNT
+1:  str xzr, [sp, x9]
+    add x9, x9, #8
+    sub x10, x10, #1
+    cbnz x10, 1b
 
     mov x0, #1
     adr x1, panel_banner
@@ -83,6 +129,11 @@ panel_start:
     b.lt panel_fail
     mov x19, x0                         // x19 = window_id
 
+    // Cache our own pid so we can filter ourselves out of sys_proclist.
+    mov x8, #SYS_GETPID
+    svc #0
+    mov x25, x0                         // x25 = panel_pid
+
     bl panel_redraw_all
 
     mov x0, #1
@@ -98,7 +149,7 @@ panel_start:
     b panel_loop
 #endif
 
-    add x20, sp, #0                     // x20 = event buffer base
+    add x20, sp, #OFF_EVENTS            // x20 = event buffer base
 
 panel_loop:
     mov x0, x19
@@ -108,11 +159,11 @@ panel_loop:
     svc #0
     mov x21, x0                         // n events
     cmp x21, #0
-    b.le panel_yield
+    b.le panel_poll
 
     mov x22, #0
 1:  cmp x22, x21
-    b.ge panel_yield
+    b.ge panel_poll
 
     // Each event is 12 bytes (3 x uint32_t).
     mov x23, x22
@@ -141,6 +192,17 @@ panel_loop:
 
 9:  add x22, x22, #1
     b 1b
+
+// panel_poll: refresh the running-apps table every REFRESH_PERIOD loop
+// iterations. Uses a 64-bit counter at OFF_YIELD_CTR.
+panel_poll:
+    ldr x9, [sp, #OFF_YIELD_CTR]
+    add x9, x9, #1
+    str x9, [sp, #OFF_YIELD_CTR]
+    cmp x9, #REFRESH_PERIOD
+    b.lt panel_yield
+    str xzr, [sp, #OFF_YIELD_CTR]
+    bl panel_refresh_running
 
 panel_yield:
     mov x0, #0
@@ -225,6 +287,19 @@ panel_btn_loop:
     b panel_btn_loop
 panel_btn_done:
 
+    // Separator line above the running-apps row.
+    mov x0, x19
+    mov x1, #0
+    mov x2, #(RUN_ROW_Y - 1)
+    mov x3, #SCREEN_W
+    mov x4, #1
+    movz x5, #0xff50, lsl #16
+    movk x5, #0x6070
+    mov x8, #SYS_WINDOW_DRAW_RECT
+    svc #0
+
+    bl panel_redraw_running
+
     // Trigger redraw.
     mov x0, x19
     mov x8, #SYS_WINDOW_REDRAW
@@ -249,17 +324,266 @@ panel_label_ptr:
     add x0, x0, x1
     ret
 
+// panel_redraw_running: paint each running-apps slot. Empty slots show
+// the dim COL_RUN_BG color; populated slots show the brighter
+// COL_RUN_ACTIVE color and the app name centered. The panel frame
+// base is at x29+16 here (panel_start stp'd x29/x30 then sub'd).
+panel_redraw_running:
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+    sub sp, sp, #48
+
+    add x28, x29, #16                   // x28 = panel frame base
+
+    mov x26, #0                         // slot index
+panel_run_slot_loop:
+    cmp x26, #RUN_SLOT_COUNT
+    b.ge panel_run_slot_done
+
+    bl panel_run_slot_x                 // x0 = slot x
+    mov x27, x0                         // x27 = slot x
+
+    // Determine background color: dim if empty, active if populated.
+    mov x9, #RUNNING_STRIDE
+    mul x9, x9, x26
+    add x10, x28, #OFF_RUNNING
+    add x10, x10, x9
+    ldr x11, [x10]                      // x11 = slot.pid (full 8 bytes)
+    movz w12, #0xff18, lsl #16
+    movk w12, #0x2028
+    cbz x11, 1f
+    movz w12, #0xff50, lsl #16
+    movk w12, #0x6880
+1:
+    // Background fill.
+    mov x0, x19
+    mov x1, x27
+    mov x2, #RUN_ROW_Y
+    mov x3, #RUN_SLOT_W
+    mov x4, #RUN_ROW_H
+    mov x5, x12
+    mov x8, #SYS_WINDOW_DRAW_RECT
+    svc #0
+
+    // If slot is empty, skip the label.
+    add x10, x28, #OFF_RUNNING
+    add x10, x10, x9
+    ldr x11, [x10]
+    cbz x11, 2f
+
+    // The name is stored just past the slot table. panel_refresh_running
+    // packs each name in a fixed 16-byte area per slot. Compute its
+    // address relative to the panel frame base.
+    add x10, x28, #OFF_RUNNING + (RUN_SLOT_COUNT * RUNNING_STRIDE)
+    mov x12, #16
+    mul x12, x12, x26
+    add x10, x10, x12
+    bl panel_strlen                     // x0 = strlen(name)
+    mov x13, #6
+    mul x13, x13, x0                    // text width in px
+    mov x14, #RUN_SLOT_W
+    sub x14, x14, x13
+    lsr x14, x14, #1                    // left pad
+    add x1, x27, x14
+    mov x2, #RUN_ROW_Y
+    add x2, x2, #8                      // baseline ≈ y+8 in 24 px tall row
+    movz x3, #0xffC0, lsl #16
+    movk x3, #0xD0E0
+    mov x4, x10
+    mov x0, x19
+    mov x8, #SYS_WINDOW_DRAW_TEXT
+    svc #0
+2:
+    add x26, x26, #1
+    b panel_run_slot_loop
+panel_run_slot_done:
+
+    add sp, sp, #48
+    ldp x29, x30, [sp], #16
+    ret
+
+// panel_run_slot_x: x0 = slot index in, x0 = slot x (panel-local).
+panel_run_slot_x:
+    mov x1, #RUN_SLOT_W
+    add x1, x1, #RUN_SLOT_GAP
+    mul x0, x0, x1
+    add x0, x0, #4
+    ret
+
+// panel_strlen: x0 = ptr, x0 = strlen (excluding terminator).
+panel_strlen:
+    mov x1, x0
+    mov x2, #0
+1:  ldrb w3, [x1, x2]
+    cbz w3, 2f
+    add x2, x2, #1
+    cmp x2, #15
+    b.lt 1b
+2:  mov x0, x2
+    ret
+
+// panel_refresh_running: poll SYS_PROCLIST, resolve each non-self pid
+// through SYS_WINDOW_FOR_PID, then call panel_redraw_running. The
+// running-apps table is laid out as RUN_SLOT_COUNT * RUNNING_STRIDE
+// bytes; each slot is {pid(u32), window_id(u32)} here. The name from
+// proclist is copied into a parallel name buffer adjacent to the slot
+// table for panel_redraw_running to render.
+panel_refresh_running:
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+    add x28, x29, #16                   // x28 = panel frame base
+
+    // Zero the slot table and name buffer first; entries we cannot
+    // repopulate stay empty.
+    mov x9, #0
+1:  cmp x9, #RUN_SLOT_COUNT
+    b.ge 2f
+    mov x10, #RUNNING_STRIDE
+    mul x10, x10, x9
+    add x11, x28, #OFF_RUNNING
+    add x11, x11, x10
+    str xzr, [x11]
+    add x9, x9, #1
+    b 1b
+2:
+    mov x9, #0
+3:  cmp x9, #RUN_SLOT_COUNT
+    b.ge 4f
+    mov x10, #NAME_STRIDE
+    mul x10, x10, x9
+    add x11, x28, #OFF_NAMES
+    add x11, x11, x10
+    str xzr, [x11]
+    str xzr, [x11, #8]
+    add x9, x9, #1
+    b 3b
+4:
+
+    // Issue SYS_PROCLIST into the buffer at OFF_PROCLIST.
+    add x0, x28, #OFF_PROCLIST
+    mov x1, #PROCLIST_MAX
+    mov x8, #SYS_PROCLIST
+    svc #0
+    cmp x0, #0
+    b.le panel_refresh_running_done      // 0 or negative => nothing to do
+
+    mov x22, x0                         // x22 = n entries
+
+    // Walk proclist entries, skipping panel_pid. The first RUN_SLOT_COUNT
+    // non-self entries populate the running-apps table.
+    mov x23, #0                         // x23 = proclist index
+    mov x24, #0                         // x24 = slot index (next free)
+panel_refresh_loop:
+    cmp x23, x22
+    b.ge panel_refresh_done
+    cmp x24, #RUN_SLOT_COUNT
+    b.ge panel_refresh_done
+
+    add x9, x28, #OFF_PROCLIST
+    mov x10, #PROC_STRIDE
+    mul x10, x10, x23
+    add x9, x9, x10                     // x9 = &entry
+    ldr w11, [x9]                       // entry.pid
+    cmp w11, w25
+    b.eq panel_refresh_skip              // skip self
+    cbz w11, panel_refresh_skip          // skip empty slots
+
+    // Resolve window_id via SYS_WINDOW_FOR_PID(pid, 0).
+    mov x0, x11
+    mov x1, #0
+    mov x8, #SYS_WINDOW_FOR_PID
+    svc #0
+    mov x12, x0
+    cmp x12, #0
+    b.lt panel_refresh_skip              // ERR_NOENT or negative => skip
+
+    // Store pid and window_id into the slot.
+    mov x10, #RUNNING_STRIDE
+    mul x10, x10, x24
+    add x11, x28, #OFF_RUNNING
+    add x11, x11, x10
+    str w11, [x11]
+    str w12, [x11, #4]
+
+    // Copy the app name (16 bytes, null-terminated) from the proclist
+    // entry into the slot's name slot.
+    mov x10, #NAME_STRIDE
+    mul x10, x10, x24
+    add x13, x28, #OFF_NAMES
+    add x13, x13, x10
+    add x15, x9, #8                     // x15 = &entry.name[0]
+    mov x14, #0
+5:  cmp x14, #16
+    b.ge 6f
+    ldrb w16, [x15, x14]
+    strb w16, [x13, x14]
+    add x14, x14, #1
+    b 5b
+6:
+
+    add x24, x24, #1
+
+panel_refresh_skip:
+    add x23, x23, #1
+    b panel_refresh_loop
+
+panel_refresh_done:
+    bl panel_redraw_running
+    mov x0, x19
+    mov x8, #SYS_WINDOW_REDRAW
+    svc #0
+
+panel_refresh_running_done:
+    ldp x29, x30, [sp], #16
+    ret
+
 // panel_on_click: w26 = panel-local x, w27 = panel-local y.
-// Determine which button was clicked and call sys_spawn for that app.
+// Determine which region was clicked and route accordingly:
+//   - button row  -> sys_spawn the app behind the button
+//   - running row  -> SYS_WINDOW_FOCUS the slot's first window
+//   - everything else (separator, gaps) -> ignore
 panel_on_click:
     stp x29, x30, [sp, #-16]!
     mov x29, sp
+    add x28, x29, #16                   // x28 = panel frame base
 
     cmp w27, #0
     b.lt panel_on_click_done
+
+    // Button row first (smaller y).
     cmp w27, #(BTN_Y - PANEL_Y + BTN_H)
+    b.lt panel_on_click_button
+
+    // Running-apps row.
+    cmp w27, #RUN_ROW_Y
+    b.lt panel_on_click_done
+    cmp w27, #(RUN_ROW_Y + RUN_ROW_H)
     b.ge panel_on_click_done
 
+    // Compute slot index from x.
+    mov x0, #RUN_SLOT_W
+    add x0, x0, #RUN_SLOT_GAP
+    udiv x1, x26, x0                    // x1 = slot index
+    msub x2, x1, x0, x26                // x2 = remainder
+    cmp x2, #RUN_SLOT_W
+    b.ge panel_on_click_done
+    cmp x1, #RUN_SLOT_COUNT
+    b.ge panel_on_click_done
+
+    // Look up the slot's window_id and raise it.
+    mov x9, #RUNNING_STRIDE
+    mul x9, x9, x1
+    add x10, x28, #OFF_RUNNING
+    add x10, x10, x9
+    ldr w11, [x10, #4]                  // x11 = window_id
+    cbz w11, panel_on_click_done         // empty slot, ignore
+
+    mov x0, x11
+    mov x8, #SYS_WINDOW_FOCUS
+    svc #0
+    b panel_on_click_done
+
+panel_on_click_button:
     mov x0, #BTN_W
     add x0, x0, #BTN_GAP
     udiv x1, x26, x0                    // x1 = button index
