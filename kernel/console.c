@@ -156,7 +156,7 @@ static void queue_mouse_move(int32_t to_x, int32_t to_y) {
     event.type = INPUT_EVENT_MOUSE_MOVE;
     event.data.mouse_move.dx = dx;
     event.data.mouse_move.dy = dy;
-    (void)input_queue_push(&event);
+    (void)gui_demo_handle_input(&event);
 }
 
 static void queue_mouse_button(uint32_t button, uint32_t pressed) {
@@ -164,14 +164,15 @@ static void queue_mouse_button(uint32_t button, uint32_t pressed) {
     event.type = INPUT_EVENT_MOUSE_BUTTON;
     event.data.mouse_button.button = button;
     event.data.mouse_button.pressed = pressed;
-    (void)input_queue_push(&event);
+    (void)gui_demo_handle_input(&event);
 }
 
 static void queue_key_press(uint32_t key) {
-    input_event_t event = {0};
-    event.type = INPUT_EVENT_KEY_PRESS;
-    event.data.key.key = key;
-    (void)input_queue_push(&event);
+    // Inject the key directly into the k> console's own line buffer
+    // rather than pushing it into the input_queue that the user
+    // shell is also reading from. Sharing that queue caused the drain
+    // to steal every byte the user typed at the u> prompt.
+    console_poll_char((char)key);
 }
 
 static int parse_signed(const char *s, int32_t *out) {
@@ -319,6 +320,16 @@ void console_set_framebuffer_ready(int ready) {
 }
 
 void console_poll_char(char ch) {
+    // Print the prompt the first time the console accepts input via
+    // the SVC drain path (console_start_interactive normally does this
+    // after the user demo returns, but the drain lets the user type
+    // earlier while EL0 processes are still alive).
+    static int prompt_pending = 1;
+    if (prompt_pending) {
+        prompt_pending = 0;
+        print_prompt();
+    }
+
     if (ch == '\r' || ch == '\n') {
         uart_puts("\n");
         g_line[g_line_len] = '\0';

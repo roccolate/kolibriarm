@@ -675,30 +675,6 @@ static void sys_exit(exception_frame_t *frame, uint64_t code) {
 void syscall_dispatch(exception_frame_t *frame) {
     process_t *current = process_current();
 
-    // Drain any pending input before handling this SVC. This gives the
-    // kernel k> console a chance to process UART keystrokes (mouse
-    // x y, click x y, key c) even while an EL0 process holds the CPU.
-    // uart_pump_input drains the UART data register directly so piped
-    // QEMU input is captured even when the PL011 RX interrupt is
-    // masked or pending.
-    extern void uart_pump_input(void);
-    uart_pump_input();
-    input_uart_poll();
-    board_virtio_input_poll();
-    input_event_t drain_event;
-    while (input_queue_poll(&drain_event) == 0) {
-        if (drain_event.type == INPUT_EVENT_KEY_PRESS) {
-            char c = (char)drain_event.data.key.key;
-            (void)gui_demo_send_key(c);
-            console_poll_char(c);
-        } else {
-            // Mouse move and button events get dispatched straight to
-            // the GUI demo so the panel can react to 'mouse x y' and
-            // 'click x y' commands issued from the serial console.
-            (void)gui_demo_handle_input(&drain_event);
-        }
-    }
-
     if (current != 0) {
         process_save_context(current, frame->x, frame->elr, frame->spsr,
                              frame->sp_el0);
