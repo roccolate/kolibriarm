@@ -62,7 +62,11 @@
 .equ EVENT_CAP,      8
 .equ OFF_EVENTS_END, (OFF_EVENTS + EVENT_CAP * 12) // 384
 .equ OFF_YIELD_CTR,  OFF_EVENTS_END          // 384
-.equ FRAME_BYTES,    (OFF_YIELD_CTR + 16)     // 400, round up
+// Hover state: signed int32 that encodes which button the cursor is
+// currently over (-1 for none). The panel_on_move updates it on
+// transitions and repaints the two affected buttons.
+.equ OFF_HOVER,      (OFF_YIELD_CTR + 8)     // 392
+.equ FRAME_BYTES,    (OFF_HOVER + 16)        // 408, round up
 
 // Colors (BGRA in little-endian: 0xAABBGGRR).
 .equ COL_BG,         0xff202428
@@ -251,38 +255,18 @@ panel_btn_loop:
     cmp x26, #BTN_COUNT
     b.ge panel_btn_done
 
+    // Is this button currently the hovered one?
+    ldr w9, [sp, #OFF_HOVER]
+    cmp w26, w9
+    b.ne panel_btn_no_hover
+    mov w10, #1                         // w10 = hovered
+    b panel_btn_paint
+panel_btn_no_hover:
+    mov w10, #0
+panel_btn_paint:
     mov x0, x26
-    bl panel_button_x                    // x0 = button x
-    mov x27, x0                         // x27 = x
-
-    mov x0, x19
-    mov x1, x27
-    mov x2, #BTN_Y - PANEL_Y
-    mov x3, #BTN_W
-    mov x4, #BTN_H
-    movz x5, #0xff3a, lsl #16
-    movk x5, #0x4658
-    mov x8, #SYS_WINDOW_DRAW_RECT
-    svc #0
-
-    // Button label (centered roughly).
-    mov x0, x19
-    mov x1, x27
-    add x1, x1, #8
-    mov x2, #BTN_Y - PANEL_Y
-    add x2, x2, #6
-    movz x3, #0xffe0, lsl #16
-    movk x3, #0xe8f0
-    mov x0, x26
-    bl panel_label_ptr
-    mov x4, x0
-    mov x0, x19
-    mov x1, x1
-    mov x2, x2
-    mov x3, x3
-    mov x8, #SYS_WINDOW_DRAW_TEXT
-    svc #0
-
+    mov x1, x10
+    bl panel_redraw_button
     add x26, x26, #1
     b panel_btn_loop
 panel_btn_done:
@@ -322,6 +306,54 @@ panel_label_ptr:
     mov x2, #10
     mul x0, x0, x2
     add x0, x0, x1
+    ret
+
+// panel_redraw_button: x0 = button index, x1 = hovered (0/1). Paints the
+// button background (BTN_BG or BTN_HI) and the centered label.
+panel_redraw_button:
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+
+    mov x26, x0                         // button index
+    mov x27, x1                         // hovered flag
+
+    bl panel_button_x                    // x0 = button x
+    mov x25, x0                         // x25 = button x (preserve across SVCs)
+
+    // Background fill: BTN_HI when hovered, BTN_BG otherwise.
+    movz w5, #0xff3a, lsl #16
+    movk w5, #0x4658                    // BTN_BG = 0xff3a4658
+    cbz w27, 1f
+    movz w5, #0xff58, lsl #16
+    movk w5, #0x70a0                    // BTN_HI = 0xff5870a0
+1:
+    mov x0, x19
+    mov x1, x25
+    mov x2, #BTN_Y - PANEL_Y
+    mov x3, #BTN_W
+    mov x4, #BTN_H
+    mov x8, #SYS_WINDOW_DRAW_RECT
+    svc #0
+
+    // Label.
+    mov x0, x19
+    mov x1, x25
+    add x1, x1, #8
+    mov x2, #BTN_Y - PANEL_Y
+    add x2, x2, #6
+    movz x3, #0xffe0, lsl #16
+    movk x3, #0xe8f0
+    mov x0, x26
+    bl panel_label_ptr
+    mov x4, x0
+    mov x0, x19
+    mov x1, x1
+    mov x2, x2
+    mov x3, x3
+    mov x8, #SYS_WINDOW_DRAW_TEXT
+    svc #0
+
+    ldp x29, x30, [sp], #16
     ret
 
 // panel_redraw_running: paint each running-apps slot. Empty slots show
@@ -636,9 +668,64 @@ panel_on_click_done:
     ldp x29, x30, [sp], #16
     ret
 
-// panel_on_move: w26 = panel-local x, w27 = panel-local y. Currently a no-op
-// (no hover effect).
+// panel_on_move: w26 = panel-local x, w27 = panel-local y. Decides which
+// button (if any) the cursor is currently over and repaints the
+// affected buttons when the hover target changes. Stores the current
+// hover index at OFF_HOVER.
 panel_on_move:
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+
+    // Compute the new hover target. -1 means "no button".
+    mov w9, #-1
+    cmp w27, #0
+    b.lt 1f
+    cmp w27, #(BTN_Y - PANEL_Y + BTN_H)
+    b.ge 1f
+    mov x0, #BTN_W
+    add x0, x0, #BTN_GAP
+    udiv x1, x26, x0                    // x1 = button index
+    msub x2, x1, x0, x26                // remainder
+    cmp x2, #BTN_W
+    b.ge 1f
+    cmp x1, #BTN_COUNT
+    b.ge 1f
+    mov x9, x1
+1:
+    // Skip the repaint if nothing changed.
+    ldr w10, [sp, #16 + OFF_HOVER]
+    cmp w9, w10
+    b.eq 9f
+
+    // Repaint the old button (un-hovered) and the new button
+    // (hovered), if each is in range. The empty-slot repaints reuse
+    // the helper to keep one source of truth for button geometry.
+    str w9, [sp, #16 + OFF_HOVER]
+
+    // Old button: clear hover highlight.
+    cmp w10, #0
+    b.lt 2f
+    cmp w10, #BTN_COUNT
+    b.ge 2f
+    mov x0, x10
+    mov x1, #0
+    bl panel_redraw_button
+2:
+    // New button: paint highlight.
+    cmp w9, #0
+    b.lt 3f
+    cmp w9, #BTN_COUNT
+    b.ge 3f
+    mov x0, x9
+    mov x1, #1
+    bl panel_redraw_button
+3:
+    // Push the repaint to the framebuffer.
+    mov x0, x19
+    mov x8, #SYS_WINDOW_REDRAW
+    svc #0
+9:
+    ldp x29, x30, [sp], #16
     ret
 
 // panel_strcpy_to: copy x0 (null-terminated) to x1; x1 returns ptr to '\0'.
