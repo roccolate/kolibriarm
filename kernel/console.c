@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 
+#include "kernel/gui.h"
 #include "kernel/mm/pmm.h"
 #include "kernel/process.h"
 #include "kernel/sched/sched.h"
@@ -83,6 +84,9 @@ static void run_mem(void) {
 
 static void run_ps(void) {
     process_t *current = process_current();
+    gui_desktop_t *desktop = gui_demo_desktop();
+    int32_t cx = 0;
+    int32_t cy = 0;
 
     uart_puts("processes=");
     print_dec64(process_count());
@@ -91,6 +95,13 @@ static void run_ps(void) {
         print_dec64(current->pid);
         uart_puts(" state=");
         print_dec64((uint64_t)current->state);
+    }
+    if (desktop != 0) {
+        gui_get_cursor(desktop, &cx, &cy);
+        uart_puts(" cursor=");
+        print_dec64((uint64_t)cx);
+        uart_puts(",");
+        print_dec64((uint64_t)cy);
     }
     uart_puts("\n");
 }

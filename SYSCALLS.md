@@ -113,6 +113,41 @@ Notes:
   cluster chains. The current driver can overwrite or grow within that chain
   and updates the directory entry size; it does not allocate new clusters.
 
+### IPC
+
+| # | Name | Args | Returns | Description |
+|---|------|------|---------|-------------|
+| 60 | `sys_ipc_send` | `x0=target_pid, x1=buf, x2=len` | bytes sent / error | Send one fixed-size queued message |
+| 61 | `sys_ipc_recv` | `x0=buf, x1=capacity` | bytes received / error | Receive the next queued message for the caller |
+
+Current limitations:
+- Message size is capped at `IPC_MAX_MESSAGE_SIZE`.
+- `sys_ipc_recv` requires `capacity == IPC_MAX_MESSAGE_SIZE`.
+- The queue is fixed-size and non-blocking; empty/full paths return
+  `ERR_AGAIN`.
+
+### Window System
+
+| # | Name | Args | Returns | Description |
+|---|------|------|---------|-------------|
+| 70 | `sys_window_create` | `x0=x, x1=y, x2=w, x3=h, x4=bg, x5=border, x6=title_ptr` | window id / error | Create a process-owned window |
+| 71 | `sys_window_destroy` | `x0=window_id` | 0 / error | Destroy a window owned by the caller |
+| 72 | `sys_window_draw_text` | `x0=window_id, x1=x, x2=y, x3=color, x4=str_ptr` | 0 / error | Draw text inside a window |
+| 73 | `sys_window_draw_rect` | `x0=window_id, x1=x, x2=y, x3=w, x4=h, x5=color` | 0 / error | Draw a clipped filled rectangle inside a window |
+| 74 | `sys_window_event` | `x0=window_id, x1=buf, x2=max_events` | event count / error | Read queued window events |
+| 75 | `sys_window_set_title` | `x0=window_id, x1=title_ptr` | 0 / error | Replace a window title |
+| 76 | `sys_window_redraw` | `x0=window_id` | 0 / error | Mark the demo GUI desktop dirty |
+
+Current limitations:
+- These syscalls are the early desktop ABI, not a stable long-term ABI.
+- Window ownership is enforced with the current process pid.
+- `sys_window_event` writes packed `gui_event_t` triples:
+  `uint32_t type, int32_t data1, int32_t data2`.
+- `sys_window_event` yields for a bounded number of scheduler turns and returns
+  `ERR_AGAIN` when no event arrives.
+- Drawing still writes through the current kernel framebuffer path; there is no
+  per-window backing buffer or explicit flush rectangle yet.
+
 ### Error Codes Implemented Today
 
 | Code | Name | Meaning |
@@ -201,18 +236,26 @@ Planned `open` flags:
 0x400 O_APPEND
 ```
 
-### Planned GUI / Window System
+### Planned GUI / Window System Extensions
 
-| # | Name | Args | Returns | Description |
-|---|------|------|---------|-------------|
-| 60 | `sys_window_create` | `x0=x, x1=y, x2=w, x3=h, x4=title_ptr` | wid | Create a window |
-| 61 | `sys_window_destroy` | `x0=wid` | 0 / error | Destroy window |
-| 62 | `sys_window_move` | `x0=wid, x1=x, x2=y` | 0 / error | Move window |
-| 63 | `sys_window_resize` | `x0=wid, x1=w, x2=h` | 0 / error | Resize window |
-| 64 | `sys_window_flush` | `x0=wid, x1=dirty_rect_ptr` | — | Flush to screen |
-| 65 | `sys_window_get_buf` | `x0=wid` | vaddr | Get drawing buffer address |
-| 66 | `sys_event_poll` | `x0=event_ptr` | 0/1 | Poll next input event |
-| 67 | `sys_event_wait` | `x0=event_ptr` | — | Block until event |
+The live GUI range starts at 70. Future GUI numbers should be assigned after
+the current 70-76 ABI is cleaned up; do not move GUI calls into 60-69 because
+that range is already used for IPC.
+
+Planned but not implemented yet:
+
+| Name | Description |
+|------|-------------|
+| `sys_window_get_bounds` | Read current window bounds |
+| `sys_window_set_bounds` | Move and/or resize a window |
+| `sys_window_show` / `sys_window_hide` | Toggle visibility |
+| `sys_window_focus` | Request focus/raise |
+| `sys_window_flush` | Flush an explicit dirty rectangle |
+| `sys_draw_line` | Draw a clipped line in a window |
+| `sys_draw_bitmap` | Blit a bitmap into a window |
+| `sys_draw_get_text_metrics` | Measure text before drawing |
+| `sys_event_poll` | Non-blocking event read with final event layout |
+| `sys_event_wait` | Blocking event read with final event layout |
 
 **Event structure:**
 ```c
@@ -238,13 +281,16 @@ typedef struct {
 | 84 | `sys_shm_unmap` | `x0=shmid` | 0 / error | Unmap shared region |
 | 85 | `sys_shm_destroy` | `x0=shmid` | 0 / error | Destroy shared region |
 
-### Planned System Info
+### Planned System Info Extensions
 
-| # | Name | Args | Returns | Description |
-|---|------|------|---------|-------------|
-| 100 | `sys_uptime` | — | ms | Milliseconds since boot |
-| 102 | `sys_cpuinfo` | `x0=info_ptr` | — | Fill CPU info struct |
-| 103 | `sys_proclist` | `x0=buf, x1=maxcount` | count | List running processes |
+The live system-info numbers are already `100 sys_timeinfo`,
+`101 sys_meminfo`, and `102 sys_proclist`. Future additions should avoid
+renumbering those calls.
+
+| Name | Description |
+|------|-------------|
+| `sys_uptime` | Return milliseconds since boot, if this remains distinct from `sys_timeinfo` |
+| `sys_cpuinfo` | Fill CPU identification and feature information |
 
 ---
 

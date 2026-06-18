@@ -4,7 +4,7 @@
 #include "../kernel/user_image.h"
 #include "../kernel/vfs.h"
 
-extern char __user_demo_start[];
+extern char __app_hello_start[];
 
 typedef struct {
     const uint8_t *data;
@@ -145,15 +145,15 @@ void test_user_image_load_bootfs_flat_uses_named_boot_file(void) {
 
     TEST_ASSERT_EQUAL_UINT64(0,
                              (uint64_t)user_image_load_bootfs_flat(
-                                 &image, "bootfs-flat", "user_demo",
+                                 &image, "bootfs-flat", "hello",
                                  (uint64_t)(uintptr_t)loaded, sizeof(loaded),
                                  0));
     TEST_ASSERT_TRUE(image.name == (const char *)"bootfs-flat");
     TEST_ASSERT_EQUAL_UINT64((uint64_t)(uintptr_t)loaded, image.base);
-    TEST_ASSERT_EQUAL_UINT64((uint8_t)__user_demo_start[0], loaded[0]);
-    TEST_ASSERT_EQUAL_UINT64((uint8_t)__user_demo_start[1], loaded[1]);
-    TEST_ASSERT_EQUAL_UINT64((uint8_t)__user_demo_start[2], loaded[2]);
-    TEST_ASSERT_EQUAL_UINT64((uint8_t)__user_demo_start[3], loaded[3]);
+    TEST_ASSERT_EQUAL_UINT64((uint8_t)__app_hello_start[0], loaded[0]);
+    TEST_ASSERT_EQUAL_UINT64((uint8_t)__app_hello_start[1], loaded[1]);
+    TEST_ASSERT_EQUAL_UINT64((uint8_t)__app_hello_start[2], loaded[2]);
+    TEST_ASSERT_EQUAL_UINT64((uint8_t)__app_hello_start[3], loaded[3]);
 }
 
 void test_user_image_load_vfs_flat_uses_mounted_file(void) {

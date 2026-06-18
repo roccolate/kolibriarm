@@ -5,13 +5,20 @@
 #include "kernel/boot_program.h"
 #include "kernel/vfs.h"
 
+#define BOOTFS_MAX_NODES 16U
+
 static bootfs_file_t g_found_file;
-static vfs_node_t g_bootfs_vfs_nodes[1];
+static vfs_node_t g_bootfs_vfs_nodes[BOOTFS_MAX_NODES];
 
 static int bootfs_vfs_read(void *context, uint64_t offset, uint8_t *buffer,
                            uint64_t capacity, uint64_t *bytes_read) {
-    (void)context;
-    return bootfs_read("user_demo", offset, buffer, capacity, bytes_read);
+    const char *name = (const char *)context;
+
+    if (name == 0) {
+        return -1;
+    }
+
+    return bootfs_read(name, offset, buffer, capacity, bytes_read);
 }
 
 const bootfs_file_t *bootfs_find(const char *name) {
@@ -56,16 +63,46 @@ int bootfs_read(const char *name, uint64_t offset, uint8_t *buffer,
 }
 
 int bootfs_mount_vfs(void) {
-    const bootfs_file_t *file = bootfs_find("user_demo");
+    static const char *app_names[] = {
+        "hello", "loop", "fault", "shell", "editor", "monitor", "win",
+        "panel",
+    };
+    static const char *app_paths[] = {
+        "/kolibri/hello", "/kolibri/loop", "/kolibri/fault",
+        "/kolibri/shell", "/kolibri/editor", "/kolibri/monitor",
+        "/kolibri/win", "/kolibri/panel",
+    };
+    uint32_t mounted = 0;
+    uint32_t app_count = sizeof(app_names) / sizeof(app_names[0]);
 
-    if (file == 0) {
+    for (uint32_t i = 0; i < BOOTFS_MAX_NODES; i++) {
+        g_bootfs_vfs_nodes[i].path = 0;
+        g_bootfs_vfs_nodes[i].size = 0;
+        g_bootfs_vfs_nodes[i].read = 0;
+        g_bootfs_vfs_nodes[i].write = 0;
+        g_bootfs_vfs_nodes[i].stat = 0;
+        g_bootfs_vfs_nodes[i].context = 0;
+    }
+
+    for (uint32_t i = 0; i < app_count; i++) {
+        const bootfs_file_t *file = bootfs_find(app_names[i]);
+        vfs_node_t *node;
+
+        if (file == 0 || file->size == 0) {
+            continue;
+        }
+
+        node = &g_bootfs_vfs_nodes[mounted];
+        node->path = app_paths[i];
+        node->size = file->size;
+        node->read = bootfs_vfs_read;
+        node->context = (void *)file->name;
+        mounted++;
+    }
+
+    if (mounted == 0) {
         return -1;
     }
 
-    g_bootfs_vfs_nodes[0].path = "/boot/user_demo";
-    g_bootfs_vfs_nodes[0].size = file->size;
-    g_bootfs_vfs_nodes[0].read = bootfs_vfs_read;
-    g_bootfs_vfs_nodes[0].context = (void *)file->name;
-
-    return vfs_mount_static(g_bootfs_vfs_nodes, 1);
+    return vfs_mount_static(g_bootfs_vfs_nodes, mounted);
 }

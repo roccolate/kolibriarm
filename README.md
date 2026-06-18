@@ -24,53 +24,58 @@ KolibriARM is a bare-metal operating system for ARM64 (AArch64) processors, writ
 
 ## Current Status
 
-> **Pre-alpha.** The kernel boots on QEMU `virt`, brings up memory management, enables an identity-mapped MMU, runs EL0 demo processes with syscall and timer-IRQ context switches, and drops into a minimal EL0 shell. One EL0 demo intentionally faults to verify that the kernel can terminate a bad user process and continue scheduling. With `make qemu-blk`, QEMU boots with a generated FAT32 virtio-blk image and reloads the EL0 demo through the VFS path.
+> **Pre-alpha foundations plus separate EL0 app blobs.** The kernel boots on
+> QEMU `virt`, brings up memory management, enables an identity-mapped MMU,
+> runs EL0 demo processes with syscall and timer-IRQ context switches, and
+> drops into a minimal `k>` debug console and an EL0 `u>` demo prompt. With
+> `make qemu-blk`, QEMU boots with a generated FAT32 virtio-blk image and
+> reloads apps through the VFS path.
+>
+> The "userland" today is a small set of flat AArch64 assembly app images
+> under `programs/apps/`, embedded through bootfs and exposed under
+> `/kolibri/<name>`. The GUI is an experimental kernel compositor with early
+> per-process window ownership. This is the foundation; the next milestone is
+> a real graphical desktop. See [ROADMAP.md](ROADMAP.md) for the honest state
+> and the path forward.
 
 | Component         | Status       | Notes                                  |
 |-------------------|-------------|----------------------------------------|
 | Bootloader        | Working      | AArch64 ASM, QEMU virt tested          |
 | Physical memory   | Working      | Bitmap allocator, host tests           |
-| Virtual memory    | Working      | Identity map, user flags, unmap tested |
-| Scheduler         | Early        | Kernel threads plus EL0 timer preemption |
-| IRQ dispatch      | Early        | GICv2, timer PPI, C handler table      |
+| Virtual memory    | Working      | Identity map, per-process user tables, user flags, unmap |
+| Scheduler         | Working      | Round-robin, timer IRQ, kernel + EL0 threads |
+| IRQ dispatch      | Working      | GICv2, timer PPI, UART RX, C handler table |
 | UART driver       | Working      | PL011 TX polling, RX IRQ ring, QEMU console input echo |
-| Syscalls          | Early        | `svc #0`, process, memory, UART/stdin, VFS read/write/seek, and fixed-message IPC calls |
-| Userland          | Early        | EL0 demos plus a shell, line editor for `/fat/edit.txt`, and process monitor |
-| Framebuffer       | Early        | Linear primitives plus virtio-gpu demo windows |
-| Storage           | Early        | virtio-blk MMIO probe and FAT32 image smoke |
-| Filesystem        | Early        | Fixed VFS, bootfs seed, tmpfs foundation, FAT32 root 8.3 lookup/listing plus limited overwrite of existing files |
-| GUI               | Early        | Kernel-managed demo windows, bitmap text, focused key delivery |
-| Networking        | Planned      | lwIP integration                       |
+| Syscalls          | Working      | process, memory, VFS, IPC, info, early window syscalls |
+| Userland          | Demo apps    | Flat asm apps under `programs/apps/`; no C userland libraries yet |
+| Framebuffer       | Working      | virtio-gpu scanout, primitives, bitmap text, alpha |
+| Storage           | Working      | virtio-blk sector read/write, FAT32 read + limited overwrite |
+| Filesystem        | Working      | Fixed VFS, bootfs seed, tmpfs, FAT32 root 8.3 lookup |
+| GUI               | Experimental | Kernel compositor has window ownership, focus, cursor, drag, and early window syscalls |
+| Mouse / cursor    | Partial      | virtio-input events are routed to the GUI demo and window event queues |
+| Networking        | Working      | virtio-net + DHCP, polled by the console thread |
+| RPi 4 port        | Builds       | Not booted on real hardware yet |
 
 ## Current Milestone
 
-The current milestone is the Phase 5 GUI foundation.
+The current milestone is **Phase 10 — a real desktop**. Read
+[ROADMAP.md](ROADMAP.md) for the full breakdown. In short:
 
-Initial scope:
-- [x] Add a syscall path for `svc #0` with syscall number in `x8`.
-- [x] Implement `sys_write`, `sys_exit`, `sys_yield`, and `sys_getpid` first.
-- [x] Build an initial EL0 context with a user stack and `eret` into an embedded hello program.
-- [x] Print `Hello from EL0` through `sys_write`, then return to the kernel through `sys_exit`.
-- [x] Move the current `kernel_main()` smoke tests behind smaller debug/demo helpers.
-- [x] Track the embedded demo with initial process-owned metadata.
-- [x] Run multiple embedded EL0 processes and preempt one with the timer IRQ.
-- [x] Convert a lower-EL memory fault into process exit while continuing to schedule.
-- [x] Route embedded EL0 programs through a tiny loader-owned image descriptor.
-- [x] Copy the embedded EL0 blob into loader-owned executable slots before entering user mode.
-- [x] Move the EL0 demo payload into `programs/` while keeping the kernel EL0 transition code separate.
-- [x] Add a tiny flat user-image header with image size and entry offsets.
-- [x] Build the EL0 demo as `build/programs/user_demo.bin` and embed that serialized image as a kernel blob.
-- [x] Add bootfs and VFS paths for named loader-owned program images.
-- [x] Load and execute the demo from a generated FAT32 virtio-blk image.
-- [x] Exchange a fixed-size IPC message between two EL0 processes.
-- [x] Render two overlapping GUI windows through `virtio-gpu`.
-- [x] Render built-in bitmap text in GUI windows.
-- [x] Route early UART keyboard characters to the focused demo window.
+- [x] Split `programs/user_demo.S` into one binary per app under
+      `programs/apps/`, registered by name in the loader and exposed under
+      `/kolibri/<name>`.
+- [ ] Add window syscalls (`sys_window_create`, `sys_window_draw_text`,
+      `sys_window_event`, `sys_window_close`) with per-process ownership.
+- [ ] Consume the queued mouse events: visible cursor, click-to-raise,
+      window drag, focus visualization.
+- [ ] Add a panel process that owns the taskbar and launches apps by
+      clicking icons.
+- [ ] Ship four real apps: `shell`, `editor`, `monitor`, `clock`.
+- [ ] Port KolibriOS's 8x8 font and (eventually) the `KOS` flat format.
 
-Out of scope for this milestone:
-- Porting KolibriOS applications directly.
-- Full POSIX-like process/userland APIs.
-- Per-process userland GUI ownership and full application windows.
+Out of scope until the desktop is real:
+- SMP, USB HID, full FAT32 write, real HTTP client.
+- RPi 4 hardware bring-up (it builds, but it is not the active target).
 
 ---
 

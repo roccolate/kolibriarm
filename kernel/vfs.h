@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-#define VFS_MAX_NODES 8U
+#define VFS_MAX_NODES 16U
 #define VFS_MAX_OPEN_FILES 8U
 #define VFS_MAX_PATH 64U
 

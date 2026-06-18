@@ -255,7 +255,7 @@ When porting to a board that doesn't provide a DTB (rare for Cortex-A), hardcode
 | Board | Status | Notes |
 |-------|--------|-------|
 | QEMU virt (Cortex-A72) | Working | Primary development target |
-| Raspberry Pi 4 | Planned | Phase 8 target |
+| Raspberry Pi 4 | In Progress | Phase 8 target, board layer done |
 | Raspberry Pi 5 | Planned | After RPi 4 |
 | Orange Pi 5 (RK3588) | Future | After RPi port matures |
 

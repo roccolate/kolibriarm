@@ -15,10 +15,52 @@ SECTIONS {
         *(.text*)
     } :text
 
-    .user_demo : ALIGN(16) {
-        __user_demo_start = .;
-        KEEP(*(.user_demo_blob*))
-        __user_demo_end = .;
+    .app_hello : ALIGN(16) {
+        __app_hello_start = .;
+        KEEP(*(.app_hello_blob*))
+        __app_hello_end = .;
+    } :text
+
+    .app_loop : ALIGN(16) {
+        __app_loop_start = .;
+        KEEP(*(.app_loop_blob*))
+        __app_loop_end = .;
+    } :text
+
+    .app_fault : ALIGN(16) {
+        __app_fault_start = .;
+        KEEP(*(.app_fault_blob*))
+        __app_fault_end = .;
+    } :text
+
+    .app_shell : ALIGN(16) {
+        __app_shell_start = .;
+        KEEP(*(.app_shell_blob*))
+        __app_shell_end = .;
+    } :text
+
+    .app_editor : ALIGN(16) {
+        __app_editor_start = .;
+        KEEP(*(.app_editor_blob*))
+        __app_editor_end = .;
+    } :text
+
+    .app_monitor : ALIGN(16) {
+        __app_monitor_start = .;
+        KEEP(*(.app_monitor_blob*))
+        __app_monitor_end = .;
+    } :text
+
+    .app_win : ALIGN(16) {
+        __app_win_start = .;
+        KEEP(*(.app_win_blob*))
+        __app_win_end = .;
+    } :text
+
+    .app_panel : ALIGN(16) {
+        __app_panel_start = .;
+        KEEP(*(.app_panel_blob*))
+        __app_panel_end = .;
     } :text
 
     .rodata : ALIGN(8) {

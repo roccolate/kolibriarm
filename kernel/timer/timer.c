@@ -3,9 +3,12 @@
 #include <stdint.h>
 
 #include "kernel/sched/sched.h"
+#include "uart/pl011.h"
+
+void kernel_on_timer_tick(void);
+
 static uint64_t g_ticks;
 static uint64_t g_interval_ticks;
-
 static uint64_t read_cntfrq(void) {
     uint64_t value;
 
@@ -39,9 +42,10 @@ void timer_init(uint32_t hz) {
 
 void timer_handle_irq(void *context) {
     (void)context;
-
     g_ticks++;
     write_cntp_tval(g_interval_ticks);
+    uart_pump_input();
+    kernel_on_timer_tick();
     sched_on_timer_tick();
 }
 

@@ -19,4 +19,19 @@ uint64_t board_virtio_mmio_base(void);
 uint64_t board_virtio_mmio_size(void);
 uint64_t board_virtio_mmio_stride(void);
 
+int board_emmc_read(uint32_t lba, uint32_t count, void *buffer);
+int board_emmc_write(uint32_t lba, uint32_t count, const void *buffer);
+
+int board_storage_read(uint32_t lba, uint32_t count, void *buffer);
+int board_storage_write(uint32_t lba, uint32_t count, const void *buffer);
+int board_storage_init(void);
+
+uint32_t board_virtio_input_irq(void);
+int board_virtio_input_init(void);
+int board_virtio_input_poll(void);
+
+uint32_t board_virtio_snd_irq(void);
+int board_virtio_snd_init(void);
+int board_virtio_snd_write_samples(const int16_t *samples, uint32_t count);
+
 #endif

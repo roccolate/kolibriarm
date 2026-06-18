@@ -2,7 +2,9 @@
 
 #include <stdint.h>
 
+#include "kernel/gui.h"
 #include "kernel/ipc.h"
+#include "input/input.h"
 #include "kernel/mm/pmm.h"
 #include "kernel/process.h"
 #include "kernel/sched/sched.h"
@@ -29,6 +31,13 @@
 #define SYS_READDIR 46ULL
 #define SYS_IPC_SEND 60ULL
 #define SYS_IPC_RECV 61ULL
+#define SYS_WINDOW_CREATE    70ULL
+#define SYS_WINDOW_DESTROY   71ULL
+#define SYS_WINDOW_DRAW_TEXT 72ULL
+#define SYS_WINDOW_DRAW_RECT 73ULL
+#define SYS_WINDOW_EVENT     74ULL
+#define SYS_WINDOW_SET_TITLE 75ULL
+#define SYS_WINDOW_REDRAW    76ULL
 #define SYS_TIMEINFO 100ULL
 #define SYS_MEMINFO 101ULL
 #define SYS_PROCLIST 102ULL
@@ -217,7 +226,7 @@ static int64_t sys_read(uint64_t fd, uint64_t buf, uint64_t len) {
             return 0;
         }
 
-        c = uart_getc_nonblock();
+        c = input_queue_poll_char();
         if (c < 0) {
             return ERR_AGAIN;
         }
@@ -412,6 +421,182 @@ static int sys_yield_process(exception_frame_t *frame) {
     return 1;
 }
 
+static int64_t sys_window_create(process_t *process, uint64_t x, uint64_t y,
+                                 uint64_t w, uint64_t h, uint64_t bg,
+                                 uint64_t border, uint64_t title_ptr) {
+    char title[GUI_TITLE_LEN];
+    uint32_t window_id = GUI_NO_WINDOW;
+
+    if (process == 0 || x > 0xffffffffULL || y > 0xffffffffULL ||
+        w > 0xffffffffULL || h > 0xffffffffULL || w < 8 || h < 8 ||
+        bg > 0xffffffffULL || border > 0xffffffffULL) {
+        return ERR_INVAL;
+    }
+
+    for (uint32_t i = 0; i < GUI_TITLE_LEN; i++) {
+        title[i] = '\0';
+    }
+    if (title_ptr != 0) {
+        if (copy_user_cstr(title_ptr, title, GUI_TITLE_LEN) != 0) {
+            return ERR_INVAL;
+        }
+    }
+
+    if (gui_demo_desktop() == 0) {
+        return ERR_AGAIN;
+    }
+
+    if (gui_create_window_for_pid(gui_demo_desktop(), process->pid,
+                                  (uint32_t)x, (uint32_t)y, (uint32_t)w,
+                                  (uint32_t)h, (uint32_t)bg,
+                                  (uint32_t)border, title,
+                                  &window_id) != 0) {
+        return ERR_AGAIN;
+    }
+    return (int64_t)window_id;
+}
+
+static int64_t sys_window_destroy(process_t *process, uint64_t window_id) {
+    if (process == 0 || window_id >= GUI_MAX_WINDOWS) {
+        return ERR_INVAL;
+    }
+    gui_window_t *window = &gui_demo_desktop()->windows[window_id];
+    if (window->used == 0) {
+        return ERR_NOENT;
+    }
+    if (window->owner_pid != process->pid) {
+        return ERR_BADF;
+    }
+    if (gui_destroy_window(gui_demo_desktop(), (uint32_t)window_id) != 0) {
+        return ERR_BADF;
+    }
+    return 0;
+}
+
+static int64_t sys_window_draw_text(process_t *process, uint64_t window_id,
+                                    uint64_t x, uint64_t y, uint64_t color,
+                                    uint64_t str_ptr) {
+    char text[128];
+    if (process == 0 || window_id >= GUI_MAX_WINDOWS) {
+        return ERR_INVAL;
+    }
+    gui_window_t *window = &gui_demo_desktop()->windows[window_id];
+    if (window->used == 0 || window->owner_pid != process->pid) {
+        return ERR_BADF;
+    }
+    if (copy_user_cstr(str_ptr, text, sizeof(text)) != 0) {
+        return ERR_INVAL;
+    }
+    if (gui_window_draw_text(gui_demo_desktop(), (uint32_t)window_id,
+                             (int32_t)x, (int32_t)y, text,
+                             (uint32_t)color) != 0) {
+        return ERR_BADF;
+    }
+    return 0;
+}
+
+static int64_t sys_window_draw_rect(process_t *process, uint64_t window_id,
+                                    uint64_t x, uint64_t y, uint64_t w,
+                                    uint64_t h, uint64_t color) {
+    if (process == 0 || window_id >= GUI_MAX_WINDOWS ||
+        x > 0x7fffffffULL || y > 0x7fffffffULL ||
+        w > 0xffffffffULL || h > 0xffffffffULL) {
+        return ERR_INVAL;
+    }
+    gui_window_t *window = &gui_demo_desktop()->windows[window_id];
+    if (window->used == 0 || window->owner_pid != process->pid) {
+        return ERR_BADF;
+    }
+    if (gui_window_draw_rect(gui_demo_desktop(), (uint32_t)window_id,
+                             (int32_t)x, (int32_t)y, (uint32_t)w,
+                             (uint32_t)h, (uint32_t)color) != 0) {
+        return ERR_BADF;
+    }
+    return 0;
+}
+
+static int64_t sys_window_set_title(process_t *process, uint64_t window_id,
+                                    uint64_t title_ptr) {
+    char title[GUI_TITLE_LEN];
+    if (process == 0 || window_id >= GUI_MAX_WINDOWS) {
+        return ERR_INVAL;
+    }
+    gui_window_t *window = &gui_demo_desktop()->windows[window_id];
+    if (window->used == 0 || window->owner_pid != process->pid) {
+        return ERR_BADF;
+    }
+    if (copy_user_cstr(title_ptr, title, GUI_TITLE_LEN) != 0) {
+        return ERR_INVAL;
+    }
+    if (gui_set_window_title(gui_demo_desktop(), (uint32_t)window_id,
+                             title) != 0) {
+        return ERR_BADF;
+    }
+    return 0;
+}
+
+static int64_t sys_window_redraw(process_t *process, uint64_t window_id) {
+    if (process == 0 || window_id >= GUI_MAX_WINDOWS) {
+        return ERR_INVAL;
+    }
+    gui_window_t *window = &gui_demo_desktop()->windows[window_id];
+    if (window->used == 0 || window->owner_pid != process->pid) {
+        return ERR_BADF;
+    }
+    /* Mark the desktop dirty so the kernel redraws on next tick. */
+    gui_demo_clear_dirty();
+    /* Force a redraw by setting dirty to 1 via the demo's internal flag.
+     * Since that's not exposed, we mark through a harmless event push
+     * is overkill; instead, we'll set dirty from within gui.c.
+     * The simplest way is to use a small dedicated trigger: we redraw
+     * directly here is not possible without the framebuffer handle, so
+     * we just toggle by calling the demo's redraw trigger.
+     */
+    extern void gui_demo_request_redraw(void);
+    gui_demo_request_redraw();
+    return 0;
+}
+
+static int64_t sys_window_event(process_t *process, exception_frame_t *frame,
+                               uint64_t window_id, uint64_t buf_ptr,
+                               uint64_t buf_count) {
+    uint32_t *out = (uint32_t *)(uintptr_t)buf_ptr;
+    if (process == 0 || window_id >= GUI_MAX_WINDOWS ||
+        buf_count == 0 || buf_count > 64) {
+        return ERR_INVAL;
+    }
+    if (!user_range_contains(buf_ptr, buf_count * 3U * sizeof(uint32_t))) {
+        return ERR_INVAL;
+    }
+    gui_window_t *window = &gui_demo_desktop()->windows[window_id];
+    if (window->used == 0 || window->owner_pid != process->pid) {
+        return ERR_BADF;
+    }
+
+    uint64_t yielded = 0;
+    while (window->event_count == 0) {
+        sys_yield_process(frame);
+        yielded++;
+        if (yielded > 256) {
+            /* Avoid spinning forever; yield back without an event. */
+            return ERR_AGAIN;
+        }
+    }
+
+    uint64_t n = 0;
+    while (n < buf_count && window->event_count > 0) {
+        gui_event_t ev;
+        if (gui_window_pop_event(window, &ev) != 0) {
+            break;
+        }
+        out[n * 3U + 0U] = ev.type;
+        out[n * 3U + 1U] = (uint32_t)ev.data1;
+        out[n * 3U + 2U] = (uint32_t)ev.data2;
+        n++;
+    }
+    return (int64_t)n;
+}
+
 static void sys_exit(exception_frame_t *frame, uint64_t code) {
     process_t *current = process_current();
     process_t *next;
@@ -508,6 +693,38 @@ void syscall_dispatch(exception_frame_t *frame) {
     case SYS_IPC_RECV:
         frame->x[0] = (uint64_t)sys_ipc_recv(current, frame->x[0],
                                              frame->x[1]);
+        break;
+    case SYS_WINDOW_CREATE:
+        frame->x[0] = (uint64_t)sys_window_create(current, frame->x[0],
+                                                  frame->x[1], frame->x[2],
+                                                  frame->x[3], frame->x[4],
+                                                  frame->x[5], frame->x[6]);
+        break;
+    case SYS_WINDOW_DESTROY:
+        frame->x[0] = (uint64_t)sys_window_destroy(current, frame->x[0]);
+        break;
+    case SYS_WINDOW_DRAW_TEXT:
+        frame->x[0] = (uint64_t)sys_window_draw_text(current, frame->x[0],
+                                                     frame->x[1], frame->x[2],
+                                                     frame->x[3],
+                                                     frame->x[4]);
+        break;
+    case SYS_WINDOW_DRAW_RECT:
+        frame->x[0] = (uint64_t)sys_window_draw_rect(current, frame->x[0],
+                                                     frame->x[1], frame->x[2],
+                                                     frame->x[3], frame->x[4],
+                                                     frame->x[5]);
+        break;
+    case SYS_WINDOW_EVENT:
+        frame->x[0] = (uint64_t)sys_window_event(current, frame, frame->x[0],
+                                                frame->x[1], frame->x[2]);
+        break;
+    case SYS_WINDOW_SET_TITLE:
+        frame->x[0] = (uint64_t)sys_window_set_title(current, frame->x[0],
+                                                     frame->x[1]);
+        break;
+    case SYS_WINDOW_REDRAW:
+        frame->x[0] = (uint64_t)sys_window_redraw(current, frame->x[0]);
         break;
     case SYS_TIMEINFO:
         frame->x[0] = (uint64_t)sys_timeinfo(frame->x[0]);

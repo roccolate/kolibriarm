@@ -1,17 +1,19 @@
 #include "kernel/user_demo.h"
 
+#include <stddef.h>
 #include <stdint.h>
 
+#include "kernel/boot_program.h"
 #include "kernel/mm/mmu.h"
 #include "kernel/mm/vmm.h"
 #include "kernel/process.h"
 #include "kernel/user_image.h"
 #include "kernel/user_vm.h"
+#include "kernel/vfs.h"
 #include "uart/pl011.h"
 
 #define USER_STACK_SIZE 4096ULL
 #define USER_IMAGE_SLOT_SIZE 8192ULL
-#define USER_DEMO_PROCESS_COUNT 4U
 #define USER_DEMO_PID_BASE 1U
 #define USER_DEMO_PSTATE 0x340ULL
 #define USER_DEMO_IMAGE_VA_BASE 0x0000000000400000ULL
@@ -19,96 +21,50 @@
 #define USER_DEMO_STACK_VA_BASE 0x0000000000800000ULL
 #define USER_DEMO_STACK_VA_STRIDE 0x0000000000010000ULL
 
+#define USER_DEMO_BOOT_APP "shell"
+
 extern uint64_t user_enter_el0(uint64_t entry, uint64_t stack_top, uint64_t pstate);
 extern char user_enter_el0_return[];
 
-static uint8_t g_user_stacks[USER_DEMO_PROCESS_COUNT][USER_STACK_SIZE]
+static uint8_t g_user_stacks[PROCESS_MAX_PROCESSES][USER_STACK_SIZE]
     __attribute__((aligned(4096)));
-static uint8_t g_user_image_slots[USER_DEMO_PROCESS_COUNT][USER_IMAGE_SLOT_SIZE]
+static uint8_t g_user_image_slots[PROCESS_MAX_PROCESSES][USER_IMAGE_SLOT_SIZE]
     __attribute__((aligned(4096)));
-static user_image_t g_user_demo_images[USER_DEMO_PROCESS_COUNT];
 static uint64_t g_spawn_memory_base;
 static uint64_t g_spawn_memory_size;
 static user_demo_map_mmio_fn_t g_spawn_map_mmio;
-static uint32_t g_next_spawn_pid = USER_DEMO_PID_BASE + USER_DEMO_PROCESS_COUNT;
-
-static uint64_t user_demo_image_vaddr(uint32_t index) {
-    return USER_DEMO_IMAGE_VA_BASE + index * USER_DEMO_IMAGE_VA_STRIDE;
-}
-
-static uint64_t user_demo_stack_vaddr(uint32_t index) {
-    return USER_DEMO_STACK_VA_BASE + index * USER_DEMO_STACK_VA_STRIDE;
-}
+static uint32_t g_next_spawn_pid = USER_DEMO_PID_BASE + 1U;
 
 uint64_t user_demo_return_address(void) {
     return (uint64_t)(uintptr_t)user_enter_el0_return;
 }
 
-static void user_demo_set_image_vaddrs(
-    user_image_t images[USER_DEMO_PROCESS_COUNT]) {
-    for (uint32_t i = 0; i < USER_DEMO_PROCESS_COUNT; i++) {
-        images[i].base = user_demo_image_vaddr(i);
-    }
+static uint64_t user_demo_image_vaddr(uint32_t slot) {
+    return USER_DEMO_IMAGE_VA_BASE + slot * USER_DEMO_IMAGE_VA_STRIDE;
 }
 
-int user_demo_prepare_images(void) {
-    if (user_image_load_bootfs_flat(&g_user_demo_images[0], "user-demo-a",
-                                    "user_demo",
-                                    (uint64_t)(uintptr_t)g_user_image_slots[0],
+static uint64_t user_demo_stack_vaddr(uint32_t slot) {
+    return USER_DEMO_STACK_VA_BASE + slot * USER_DEMO_STACK_VA_STRIDE;
+}
+
+static int load_named_image(const char *name, user_image_t *image,
+                            uint32_t slot) {
+    if (user_image_load_bootfs_flat(image, name, name,
+                                    (uint64_t)(uintptr_t)g_user_image_slots[slot],
                                     USER_IMAGE_SLOT_SIZE, 0) != 0) {
         return -1;
     }
 
-    if (user_image_load_bootfs_flat(&g_user_demo_images[1], "user-demo-b",
-                                    "user_demo",
-                                    (uint64_t)(uintptr_t)g_user_image_slots[1],
-                                    USER_IMAGE_SLOT_SIZE, 1) != 0) {
-        return -1;
-    }
+    image->base = user_demo_image_vaddr(slot);
+    return 0;
+}
 
-    if (user_image_load_bootfs_flat(&g_user_demo_images[2], "user-demo-fault",
-                                    "user_demo",
-                                    (uint64_t)(uintptr_t)g_user_image_slots[2],
-                                    USER_IMAGE_SLOT_SIZE, 2) != 0) {
-        return -1;
-    }
-    if (user_image_load_bootfs_flat(&g_user_demo_images[3], "user-shell",
-                                    "user_demo",
-                                    (uint64_t)(uintptr_t)g_user_image_slots[3],
-                                    USER_IMAGE_SLOT_SIZE, 3) != 0) {
-        return -1;
-    }
-    user_demo_set_image_vaddrs(g_user_demo_images);
-
+int user_demo_prepare_images(void) {
     return 0;
 }
 
 int user_demo_prepare_vfs_images(const char *path) {
-    user_image_t images[USER_DEMO_PROCESS_COUNT];
-
-    if (user_image_load_vfs_flat(&images[0], "user-demo-a", path,
-                                 (uint64_t)(uintptr_t)g_user_image_slots[0],
-                                 USER_IMAGE_SLOT_SIZE, 0) != 0 ||
-        user_image_load_vfs_flat(&images[1], "user-demo-b", path,
-                                 (uint64_t)(uintptr_t)g_user_image_slots[1],
-                                 USER_IMAGE_SLOT_SIZE, 1) != 0 ||
-        user_image_load_vfs_flat(&images[2], "user-demo-fault", path,
-                                 (uint64_t)(uintptr_t)g_user_image_slots[2],
-                                 USER_IMAGE_SLOT_SIZE, 2) != 0 ||
-        user_image_load_vfs_flat(&images[3], "user-shell", path,
-                                 (uint64_t)(uintptr_t)g_user_image_slots[3],
-                                 USER_IMAGE_SLOT_SIZE, 3) != 0) {
-        return -1;
-    }
-
-    user_demo_set_image_vaddrs(images);
-    for (uint32_t i = 0; i < USER_DEMO_PROCESS_COUNT; i++) {
-        g_user_demo_images[i].name = images[i].name;
-        g_user_demo_images[i].base = images[i].base;
-        g_user_demo_images[i].size = images[i].size;
-        g_user_demo_images[i].entry_offset = images[i].entry_offset;
-    }
-
+    (void)path;
     return 0;
 }
 
@@ -165,20 +121,20 @@ static int create_user_demo_page_table(process_t *process,
 }
 
 static int init_user_demo_process(process_t *process, const user_image_t *image,
-                                  uint32_t stack_index, uint64_t memory_base,
+                                  uint32_t slot, uint64_t memory_base,
                                   uint64_t memory_size,
                                   user_demo_map_mmio_fn_t map_mmio) {
     uint64_t image_paddr;
     uint64_t stack_paddr;
     uint64_t stack_vaddr;
 
-    if (process == 0 || stack_index >= USER_DEMO_PROCESS_COUNT) {
+    if (process == 0 || slot >= PROCESS_MAX_PROCESSES) {
         return -1;
     }
 
-    image_paddr = (uint64_t)(uintptr_t)g_user_image_slots[stack_index];
-    stack_paddr = (uint64_t)(uintptr_t)g_user_stacks[stack_index];
-    stack_vaddr = user_demo_stack_vaddr(stack_index);
+    image_paddr = (uint64_t)(uintptr_t)g_user_image_slots[slot];
+    stack_paddr = (uint64_t)(uintptr_t)g_user_stacks[slot];
+    stack_vaddr = user_demo_stack_vaddr(slot);
 
     if (user_image_prepare_process(process, image, stack_vaddr,
                                    USER_STACK_SIZE, USER_DEMO_PSTATE) != 0) {
@@ -195,30 +151,46 @@ int user_demo_spawn_vfs(const char *path, uint32_t entry_index) {
     process_t *process;
     user_image_t image;
     uint32_t slot;
+    const char *app_name;
+    size_t name_len;
 
-    if (path == 0 || entry_index >= USER_IMAGE_MAX_ENTRIES ||
-        g_spawn_memory_size == 0) {
+    (void)entry_index;
+
+    if (path == 0 || g_spawn_memory_size == 0) {
+        return -1;
+    }
+
+    if (path[0] != '/' || path[1] != 'k' || path[2] != 'o' ||
+        path[3] != 'l' || path[4] != 'i' || path[5] != 'b' ||
+        path[6] != 'r' || path[7] != 'i' || path[8] != '/' ||
+        path[9] == '\0') {
+        return -1;
+    }
+
+    app_name = path + 9;
+    name_len = 0;
+    while (app_name[name_len] != '\0') {
+        name_len++;
+    }
+    if (name_len == 0 || name_len >= 32) {
         return -1;
     }
 
     (void)process_reclaim_zombies();
-    process = process_alloc(g_next_spawn_pid++, "spawned");
+    process = process_alloc(g_next_spawn_pid++, app_name);
     if (process == 0) {
         return -1;
     }
 
-    if (process_index(process, &slot) != 0 || slot >= USER_DEMO_PROCESS_COUNT) {
+    if (process_index(process, &slot) != 0 || slot >= PROCESS_MAX_PROCESSES) {
         process_release(process);
         return -1;
     }
 
-    if (user_image_load_vfs_flat(&image, "spawned", path,
-                                 (uint64_t)(uintptr_t)g_user_image_slots[slot],
-                                 USER_IMAGE_SLOT_SIZE, entry_index) != 0) {
+    if (load_named_image(app_name, &image, slot) != 0) {
         process_release(process);
         return -1;
     }
-    image.base = user_demo_image_vaddr(slot);
 
     if (init_user_demo_process(process, &image, slot, g_spawn_memory_base,
                                g_spawn_memory_size, g_spawn_map_mmio) != 0) {
@@ -235,28 +207,33 @@ uint64_t user_demo_run(uint64_t memory_base, uint64_t memory_size,
     uint64_t *kernel_page_table =
         (uint64_t *)(uintptr_t)mmu_read_ttbr0_el1();
     uint64_t exit_code;
-    process_t *first = process_alloc(USER_DEMO_PID_BASE,
-                                     g_user_demo_images[0].name);
-    process_t *second = process_alloc(USER_DEMO_PID_BASE + 1U,
-                                      g_user_demo_images[1].name);
-    process_t *faulting = process_alloc(USER_DEMO_PID_BASE + 2U,
-                                        g_user_demo_images[2].name);
-    process_t *shell = process_alloc(USER_DEMO_PID_BASE + 3U,
-                                     g_user_demo_images[3].name);
+    process_t *shell;
+    user_image_t shell_image;
+    uint32_t slot;
 
-    if (init_user_demo_process(first, &g_user_demo_images[0], 0, memory_base,
-                               memory_size, map_mmio) != 0 ||
-        init_user_demo_process(second, &g_user_demo_images[1], 1, memory_base,
-                               memory_size, map_mmio) != 0 ||
-        init_user_demo_process(faulting, &g_user_demo_images[2], 2, memory_base,
-                               memory_size, map_mmio) != 0 ||
-        init_user_demo_process(shell, &g_user_demo_images[3], 3, memory_base,
-                               memory_size, map_mmio) != 0) {
-        uart_puts("USER demo: process setup failed\n");
-        process_release(first);
-        process_release(second);
-        process_release(faulting);
+    (void)process_reclaim_zombies();
+    shell = process_alloc(USER_DEMO_PID_BASE, USER_DEMO_BOOT_APP);
+    if (shell == 0) {
+        uart_puts("USER demo: process alloc failed\n");
+        return 1;
+    }
+
+    if (process_index(shell, &slot) != 0) {
         process_release(shell);
+        uart_puts("USER demo: process slot failed\n");
+        return 1;
+    }
+
+    if (load_named_image(USER_DEMO_BOOT_APP, &shell_image, slot) != 0) {
+        process_release(shell);
+        uart_puts("USER demo: image load failed\n");
+        return 1;
+    }
+
+    if (init_user_demo_process(shell, &shell_image, slot, memory_base,
+                               memory_size, map_mmio) != 0) {
+        process_release(shell);
+        uart_puts("USER demo: process setup failed\n");
         return 1;
     }
 
@@ -264,28 +241,24 @@ uint64_t user_demo_run(uint64_t memory_base, uint64_t memory_size,
     g_spawn_memory_size = memory_size;
     g_spawn_map_mmio = map_mmio;
 
-    first->state = PROCESS_RUNNING;
-    second->state = PROCESS_READY;
-    faulting->state = PROCESS_READY;
-    shell->state = PROCESS_READY;
-    process_set_current(first);
+    /* Auto-spawn the panel taskbar as a sibling process. */
+    (void)user_demo_spawn_vfs("/kolibri/panel", 0);
+
+    shell->state = PROCESS_RUNNING;
+    process_set_current(shell);
 
     uart_puts("USER demo: entering EL0\n");
-    if (first->page_table != 0) {
-        mmu_set_ttbr0(first->page_table);
+    if (shell->page_table != 0) {
+        mmu_set_ttbr0(shell->page_table);
     }
-    exit_code = user_enter_el0(first->pc, first->sp, first->pstate);
+    exit_code = user_enter_el0(shell->pc, shell->sp, shell->pstate);
     if (kernel_page_table != 0) {
         mmu_set_ttbr0(kernel_page_table);
     }
     uart_puts("USER demo: returned to EL1\n");
 
-    if (process_reclaim_zombies() == 0) {
-        process_release(first);
-        process_release(second);
-        process_release(faulting);
-        process_release(shell);
-    }
+    (void)process_reclaim_zombies();
+    process_release(shell);
 
     return exit_code;
 }

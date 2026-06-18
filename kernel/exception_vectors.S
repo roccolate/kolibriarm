@@ -106,6 +106,15 @@ lower_sync_entry:
 
 .macro IRQ_ENTRY
 irq_entry:
+    /* Mask IRQ before saving context. Without this, a new IRQ could fire
+     * while the handler runs and stack its own 288-byte frame on top of
+     * ours. The kernel main stack is only 16 KB; with multiple virtio
+     * devices firing back-to-back (virtio-gpu + virtio-input + timer)
+     * nested IRQs overflow into BSS and corrupt static state such as
+     * g_uart_base. The trade-off is non-preemptible IRQ handling, which
+     * is acceptable for the current single-core design. */
+    msr daifset, #2
+
     sub sp, sp, #288
     stp x0, x1, [sp, #0]
     stp x2, x3, [sp, #16]
@@ -158,6 +167,9 @@ irq_entry:
     ldp x28, x29, [sp, #224]
     ldr x30, [sp, #240]
     add sp, sp, #288
+
+    /* Re-enable IRQ (clear I bit in DAIF) just before eret. */
+    msr daifclr, #2
     eret
 .endm
 

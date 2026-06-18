@@ -20,14 +20,14 @@
 #include "kernel/tmpfs.h"
 #include "kernel/user_demo.h"
 #include "kernel/vfs.h"
-#include "storage/virtio_blk.h"
 #include "uart/pl011.h"
+#include "input/input.h"
+#include "third_party/lwip_port/kolibri_net.h"
 
 extern char __kernel_end[];
 
 void kernel_main(uint64_t dtb_addr);
 
-static virtio_blk_device_t g_blk_dev;
 static fat32_fs_t g_fat32_fs;
 
 static void print_hex64(uint64_t value) {
@@ -43,14 +43,23 @@ static void console_input_thread(void *arg) {
     (void)arg;
 
     for (;;) {
-        int c = uart_getc_nonblock();
+        input_uart_poll();
+        board_virtio_input_poll();
 
-        if (c >= 0) {
-            (void)gui_demo_send_key((char)c);
-            console_poll_char((char)c);
-        } else {
+        input_event_t event;
+        while (input_queue_poll(&event) == 0) {
+            if (event.type == INPUT_EVENT_KEY_PRESS) {
+                char c = (char)event.data.key.key;
+                (void)gui_demo_send_key(c);
+                console_poll_char(c);
+            }
+        }
+
+        if (input_queue_available() == 0) {
             __asm__ volatile("wfe");
         }
+
+        kolibri_net_poll();
 
         sched_yield();
     }
@@ -107,7 +116,7 @@ static void init_vfs(void) {
         uart_puts("VFS tmpfs: failed\n");
     }
 
-    if (bootfs_read("user_demo", 0, magic, sizeof(magic),
+    if (bootfs_read("hello", 0, magic, sizeof(magic),
                     &bytes_read) == 0 && bytes_read == sizeof(magic)) {
         uart_puts("bootfs read: ok\n");
     } else {
@@ -115,7 +124,7 @@ static void init_vfs(void) {
     }
 
     bytes_read = 0;
-    if (vfs_read("/boot/user_demo", 0, magic, sizeof(magic),
+    if (vfs_read("/kolibri/hello", 0, magic, sizeof(magic),
                  &bytes_read) == 0 && bytes_read == sizeof(magic)) {
         uart_puts("VFS read: ok\n");
     } else {
@@ -132,26 +141,26 @@ static void run_user_demo_smoke(const dtb_memory_t *memory) {
     uart_puts("\n");
 }
 
-static int fat32_read_virtio_sector(void *context, uint32_t lba,
-                                    uint8_t *buffer) {
-    return virtio_blk_read_sector((virtio_blk_device_t *)context, lba, buffer);
+static int fat32_read_storage(void *context, uint32_t lba, uint8_t *buffer) {
+    (void)context;
+    return board_storage_read(lba, 1, buffer);
 }
 
-static int fat32_write_virtio_sector(void *context, uint32_t lba,
-                                     const uint8_t *buffer) {
-    return virtio_blk_write_sector((virtio_blk_device_t *)context, lba,
-                                   buffer);
+static int fat32_write_storage(void *context, uint32_t lba,
+                               const uint8_t *buffer) {
+    (void)context;
+    return board_storage_write(lba, 1, buffer);
 }
 
 static int probe_fat32(void) {
     vfs_stat_t stat;
 
     fat32_vfs_reset();
-    if (fat32_mount(&g_fat32_fs, fat32_read_virtio_sector, &g_blk_dev) != 0) {
+    if (fat32_mount(&g_fat32_fs, fat32_read_storage, NULL) != 0) {
         uart_puts("FAT32: absent\n");
         return -1;
     }
-    fat32_set_write_sector(&g_fat32_fs, fat32_write_virtio_sector);
+    fat32_set_write_sector(&g_fat32_fs, fat32_write_storage);
 
     uart_puts("FAT32: mounted\n");
     if (fat32_mount_vfs_root(&g_fat32_fs, "/fat") == 0) {
@@ -181,43 +190,29 @@ static int probe_fat32(void) {
 }
 
 static int probe_storage(void) {
-    virtio_blk_info_t blk;
     uint8_t sector[512] __attribute__((aligned(8)));
-    uint64_t blk_base;
     int read_status;
 
-    if (virtio_blk_probe_range(board_virtio_mmio_base(),
-                               board_virtio_mmio_size(),
-                               board_virtio_mmio_stride(), &blk_base,
-                               &blk) != 0) {
-        uart_puts("VIRTIO blk: absent\n");
+    if (board_storage_init() != 0) {
+        uart_puts("storage: init failed\n");
         return -1;
     }
 
-    uart_puts("VIRTIO blk base: ");
-    print_hex64(blk_base);
-    uart_puts("\n");
-    uart_puts("VIRTIO blk sectors: ");
-    print_hex64(blk.capacity_sectors);
-    uart_puts("\n");
+    uart_puts("storage: initialized\n");
 
-    read_status = virtio_blk_init(&g_blk_dev, blk_base);
-    if (read_status == 0) {
-        read_status = virtio_blk_read_sector(&g_blk_dev, 0, sector);
-    }
-
+    read_status = board_storage_read(0, 1, sector);
     if (read_status == 0) {
         uint32_t word = (uint32_t)sector[0] |
                         ((uint32_t)sector[1] << 8) |
                         ((uint32_t)sector[2] << 16) |
                         ((uint32_t)sector[3] << 24);
 
-        uart_puts("VIRTIO blk sector0: ");
+        uart_puts("storage sector0: ");
         print_hex64(word);
         uart_puts("\n");
         return probe_fat32();
     } else {
-        uart_puts("VIRTIO read err: ");
+        uart_puts("storage read err: ");
         print_hex64((uint64_t)(uint32_t)read_status);
         uart_puts("\n");
     }
@@ -225,8 +220,14 @@ static int probe_storage(void) {
     return -1;
 }
 
+static uint64_t g_gpu_base;
+static uint8_t g_gpu_ready;
+
 static void init_display(void) {
     uint64_t gpu_base;
+
+    g_gpu_base = 0;
+    g_gpu_ready = 0;
 
     if (virtio_gpu_probe_range(board_virtio_mmio_base(),
                                board_virtio_mmio_size(),
@@ -235,13 +236,39 @@ static void init_display(void) {
         return;
     }
 
+    g_gpu_base = gpu_base;
+
     if (virtio_gpu_draw(gpu_base, gui_draw_demo, 0) == 0) {
         uart_puts("VIRTIO gpu: windows\n");
         console_set_framebuffer_ready(1);
+        g_gpu_ready = 1;
     } else {
         uart_puts("VIRTIO gpu: failed\n");
         console_set_framebuffer_ready(0);
     }
+}
+
+static void poll_input_events(void) {
+    input_event_t event;
+
+    while (input_queue_poll(&event) == 0) {
+        if (event.type == INPUT_EVENT_MOUSE_MOVE ||
+            event.type == INPUT_EVENT_MOUSE_BUTTON ||
+            event.type == INPUT_EVENT_KEY_PRESS ||
+            event.type == INPUT_EVENT_KEY_RELEASE) {
+            if (gui_demo_handle_input(&event) == 0 && g_gpu_ready) {
+                if (gui_demo_is_dirty()) {
+                    (void)virtio_gpu_draw(g_gpu_base, gui_draw_render, 0);
+                    gui_demo_clear_dirty();
+                }
+            }
+        }
+    }
+}
+
+void kernel_on_timer_tick(void) {
+    board_virtio_input_poll();
+    poll_input_events();
 }
 
 static int enable_identity_mmu(const dtb_memory_t *memory, uint64_t dtb_addr) {
@@ -286,9 +313,23 @@ static void init_timer_irq_demo(void) {
     irq_enable();
 }
 
-static void start_scheduler_demo(void) {
-    (void)sched_create_kernel_thread(console_input_thread, 0, "console-input");
+static void init_network(void) {
+    if (kolibri_net_init() == 0) {
+        uart_puts("network: initialized\n");
+    } else {
+        uart_puts("network: failed\n");
+    }
+}
 
+static void init_input(void) {
+    input_queue_init();
+    if (board_virtio_input_init() == 0) {
+        uart_puts("input: virtio-input initialized\n");
+    }
+}
+
+static void start_scheduler_demo(void) {
+    (void)console_input_thread;
     sched_start();
 }
 
@@ -324,6 +365,8 @@ void kernel_main(uint64_t dtb_addr) {
                 uart_puts("USER image source: bootfs\n");
             }
             init_display();
+            init_network();
+            init_input();
             run_user_demo_smoke(&memory);
             console_start_interactive();
             start_scheduler_demo();

@@ -1,5 +1,3 @@
-ENTRY(user_demo_image_header)
-
 SECTIONS {
     . = 0;
 
