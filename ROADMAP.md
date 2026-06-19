@@ -12,17 +12,29 @@ where applicable, on real hardware).
 
 ## Where we actually are
 
-The current system can boot on QEMU `virt` and reach a serial `k>` prompt, and
-then drop into an EL0 demo `u>` prompt. What runs there is one flat image
-(`programs/user_demo.S`, 1.4k lines of AArch64 asm) that exports eight entry
-points — hello, hello-second, fault, shell, run-hello, run-loop, editor, and
-monitor — and treats them as "applications" through `sys_spawn`. There is no
-desktop, no mouse cursor, no per-process window ownership, and no real
-separation between apps. The framebuffer shows two hardcoded rectangles with
-the strings "KOLIBRI ARM" and "FAT32 IPC".
+The current system boots on QEMU `virt`, initializes the kernel foundations,
+mounts bootfs/VFS, and starts `/kolibri/panel` as the first EL0 app. The
+serial `k>` console still exists as a debug fallback, but the intended primary
+surface is now the graphical desktop.
 
-That is a real foundations layer. It is not yet a usable OS and it is not close
-to KolibriOS. The work below is what changes that.
+Userland is no longer one `programs/user_demo.S` blob. Each app under
+`programs/apps/` builds as a separate flat AArch64 image, is registered in
+`kernel/boot_program.c`, and is exposed through bootfs under
+`/kolibri/<name>`. `sys_spawn` loads those named images into separate
+processes with their own process state, user stack, and page table.
+
+The GUI is an experimental kernel compositor with per-process window
+ownership, focus, cursor state, click-to-raise, window dragging, title bars,
+and title-bar close events. The desktop starts empty; the panel owns the
+taskbar window and launches apps. `clock` and `editor` are windowed apps now.
+`shell` and `monitor` still use the serial surface.
+
+This is close to an alpha desktop foundation, but it is not a complete alpha
+yet. The remaining blockers are practical: make the interactive QEMU launch
+and close checks reliable, move `shell` and `monitor` into windows or define
+that they are debug/serial tools, decide the first redraw/expose rule that
+survives overlapping windows, and keep the app ABI small enough to replace
+direct assembly syscalls with a tiny userland library later.
 
 ### Foundations that are actually in place
 
@@ -37,24 +49,30 @@ to KolibriOS. The work below is what changes that.
 - virtio-blk sector read/write; FAT32 BPB parse, root 8.3 listing, limited
   overwrite of preallocated files
 - tmpfs (in-RAM) with create/read/write/delete
-- Fixed VFS, bootfs seed, named program registry
+- Fixed VFS, bootfs seed, named program registry, `/kolibri/<name>` app paths
 - Fixed-message IPC `sys_ipc_send` / `sys_ipc_recv`
 - Bitmap 5x7 font, scalar 2D primitives, alpha blending, clipping
+- Kernel-owned GUI compositor with per-process windows, cursor, focus, drag,
+  title bars, and title-bar close events
+- Panel taskbar app booted automatically as the first EL0 process
 - Kernel debug console (`k>`) with help/mem/ps/ticks/storage/fb
 - From-scratch virtio-net + DHCP client, polled by the kernel console thread
 
-### Things that look "done" in the code but are not real
+### Remaining rough edges
 
-- The "GUI" is two static windows drawn once on boot. No mouse cursor, no
-  click handling, no focus visualization, no redraw on event, no per-process
-  ownership.
-- The "userland" is one .S file with eight labels. `sys_spawn` only changes the
-  PC into one of those labels. They share the same page table, the same flat
-  memory, the same stack pool, and the same `user_image` blob.
-- The "shell" matches full command strings (`ls /fat`, `cat /tmp/note`); it
-  does not parse arguments and it cannot list or close windows.
-- The "editor" is line-based, no scrolling, no window, and saves into a single
-  preallocated file in the FAT32 root.
+- The app ABI is still direct AArch64 assembly syscalls; there is no C
+  userland helper library yet.
+- The shell has a small command parser and `run <name>`, but no real argv
+  passing and no desktop window.
+- The editor owns a window and edits `/tmp/note`, but it is intentionally
+  minimal: no cursor rendering, no scrolling, no arrow movement, and only the
+  first screenful is drawn.
+- The monitor reads `sys_proclist`/`sys_meminfo`, but it is still a serial app
+  rather than a desktop window.
+- Window redraw is still whole-desktop and demo-level; there are no per-window
+  backing buffers or damage rectangles yet.
+- Resize is defined in the event ABI but not produced. Minimize/maximize and
+  taskbar-owned focus controls are not implemented.
 - Phase 8 (RPi 4 port) builds but has never been booted on hardware.
 
 ---
@@ -72,9 +90,8 @@ instead of a demo.
 
 ### Phase 10.0 — Honest split of the userland
 
-Stop treating `user_demo.S` as the userland. Each "application" becomes its own
-flat binary with its own linker script, and the loader learns to find them by
-name.
+Stop treating `user_demo.S` as the userland. Each application is now its own
+flat binary with its own linker script, and the loader can find them by name.
 
 - Refactor `programs/user_demo.S` into one `.S` per app under `programs/apps/`
   (start with `hello`, `loop`, `shell`, `editor`, `monitor`, `fault`).
@@ -87,10 +104,10 @@ name.
   -errno on failure.
 
 Exit criteria:
-- [ ] Six independent flat EL0 binaries built and registered.
-- [ ] `sys_spawn("/kolibri/shell", 0)` returns a fresh pid with its own
+- [x] Nine independent flat EL0 binaries built and registered.
+- [x] `sys_spawn("/kolibri/shell", 0)` returns a fresh pid with its own
       page table and stack.
-- [ ] Existing host tests still pass.
+- [x] Existing host tests still pass.
 
 ### Phase 10.1 — Mouse, cursor, hit testing
 
@@ -115,10 +132,12 @@ Exit criteria:
   the owner only.
 - `sys_window_draw_text(handle, x, y, text, color)` for the in-window
   text path apps actually use.
-- `sys_window_draw_rect/line/circle` for the same.
-- `sys_window_event` blocks the caller until a key/click arrives for one of
-  its windows and returns the event.
-- `sys_window_close(handle)` removes the window and wakes any blocked owner.
+- `sys_window_draw_rect` for the same. Lines, circles, and bitmaps are still
+  future draw primitives.
+- `sys_window_event` yields for a bounded number of scheduler turns, then
+  returns packed events or `ERR_AGAIN`.
+- `sys_window_destroy(handle)` removes an owner window. Title-bar close clicks
+  are delivered to the owner as `GUI_EVENT_CLOSE`.
 - Kernel redraws the desktop on every state change; apps do not touch the
   framebuffer directly.
 
@@ -140,27 +159,29 @@ Exit criteria:
   surface; it stays as a debug fallback.
 
 Exit criteria:
-- [ ] Boot reaches the desktop without the user typing anything.
+- [x] Boot reaches the desktop without the user typing anything.
 - [ ] Clicking the editor icon spawns the editor app, which opens its own
-      window and starts editing `/tmp/note.txt`.
+      window and starts editing `/tmp/note`.
 - [ ] Closing the editor's window does not crash the panel or the kernel.
 
 ### Phase 10.4 — Real apps (minimum four)
 
 Each app is a small flat binary that owns one window and reacts to events.
 
-- `shell` — parses a line of text, splits args, calls `sys_spawn` or
-  `sys_window_list` etc. No more hardcoded full-string matches.
-- `editor` — one file per window, arrow keys to move, backspace deletes,
-  ctrl-s saves to `/tmp/note.txt`, ctrl-q closes the window.
-- `monitor` — redraws the process list and free-page count every second
-  using a redraw event the WM sends.
-- `clock` — redraws the wall time from the existing timer ticks.
+- `shell` — parses a small command set and supports `run <name>` for any
+  registered app. It still ignores trailing args and still uses serial I/O.
+- `editor` — owns one window, appends printable input, supports backspace and
+  newline, saves `/tmp/note` with ctrl-s, and closes with ctrl-q or title-bar
+  close. Cursor movement and scrolling are not implemented yet.
+- `monitor` — reads the process list and free-page count every loop, but still
+  renders to serial instead of a desktop window.
+- `clock` — owns one window and redraws time from the existing timer ticks.
 
 Exit criteria:
 - [ ] All four apps run together without crashing.
 - [ ] Editing in `editor` is visible only inside the editor window.
-- [ ] `shell` correctly spawns any other registered app by name with args.
+- [x] `shell` can spawn any registered app by name with `run <name>`.
+- [ ] `shell` correctly passes args to spawned apps.
 
 ### Phase 10.5 — Polish and KolibriOS ports
 
@@ -175,9 +196,9 @@ Exit criteria:
 Exit criteria:
 - [ ] Visible title bars with text on every app window.
 - [x] Visible title bars with text on every app window that opts in via
-      `sys_window_set_title(window_id, title_ptr, title_h)`. The clock app
-      is the first opt-in. The panel stays a bar without a title text so
-      its 32 px height can keep all eight launcher buttons.
+      `sys_window_set_title(window_id, title_ptr, title_h)`. `clock` and
+      `editor` are current opt-ins. The panel stays a bar without title text
+      so its 32 px height can keep all launcher buttons.
 - [ ] Cursor changes shape over clickable decorations (hand on icon, arrow
       on text).
 - [ ] Building from a KolibriOS `.kos` demo file works for at least hello.
@@ -192,7 +213,8 @@ candidates, in rough order of return on effort:
 - **Per-window backing buffers or damage tracking (deferred).** Today's
   compositor repaints the full desktop on every dirty tick, which is
   visually fine for move/drag and for apps that repaint their whole
-  content area (clock, monitor, editor when rewritten, shell). It
+  content area (clock and editor do this now; future windowed apps must do
+  the same until the rule changes). It
   becomes fragile only when an app relies on partial updates that
   overlap with another window's redraw between ticks. Implement the
   first concrete case of that breakage before designing the

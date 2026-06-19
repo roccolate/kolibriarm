@@ -1,9 +1,8 @@
 // KolibriARM app: shell
 //
-// A minimal command line. The first EL0 program the user meets. It reads
-// characters from stdin (sys_read on fd 0), echoes them to stdout, and
-// dispatches a fixed set of one-word commands. Full argument parsing lands
-// with the panel/desktop work in Phase 10.4.
+// A minimal command line. It reads characters from stdin (sys_read on fd 0),
+// echoes them to stdout, dispatches a small fixed command set, and supports
+// `run <name>` for registered apps. Full argv passing is still future work.
 
 .section .user.image.header, "a"
 .global shell_image_header
@@ -27,15 +26,6 @@ shell_image_header:
 .type shell_start, %function
 
 shell_start:
-    mov x8, #3                    // sys_getpid
-    svc #0
-    cmp x0, #1
-    b.eq 1f
-    mov x0, #1
-    mov x8, #1                    // sys_exit
-    svc #0
-
-1:
     sub sp, sp, #96
     mov x19, sp                   // line buffer (64 bytes)
     mov x26, #0                   // last spawn pid (for "kill last")

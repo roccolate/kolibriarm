@@ -58,8 +58,7 @@ clock_start:
     adr x1, clock_banner
     bl common_write_cstr
 
-    // Create window at (440, 64) so it sits to the right of the demo
-    // windows, visible without overlap.
+    // Create window at (440, 64), near the upper-right of the desktop.
     mov x0, #440
     mov x1, #64
     mov x2, #WIN_W
@@ -117,16 +116,9 @@ clock_loop:
     mov x24, x23
     mov x25, #12
     mul x24, x24, x25
-    add x24, sp, #24
-    add x24, x24, x24, lsl #0       // x24 = base + offset*2 (not needed)
-    // Compute actual offset: base + i * 12. The lsl above is wrong;
-    // re-do it cleanly.
-    sub x24, x24, x24                // x24 = 0 (placeholder)
-    mov x24, x23
-    mov x25, #12
-    mul x24, x24, x25
-    add x24, sp, #24
-    add x24, x24, #0                // (placeholder arithmetic kept)
+    add x24, x24, #24               // event buffer starts at sp + 24
+    mov x26, sp
+    add x24, x26, x24
     ldr w25, [x24]                  // event type
     cmp w25, #6                     // GUI_EVENT_CLOSE
     b.eq clock_exit

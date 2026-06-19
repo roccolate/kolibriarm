@@ -71,13 +71,22 @@ Input is queued but still early:
 - `drivers/input/virtio_input.c` maps virtio keyboard and mouse events into
   `input_event_t`.
 - UART key input is also mapped into `INPUT_EVENT_KEY_PRESS`.
+- During syscall dispatch, pending input is drained to the GUI for all calls
+  except `SYS_READ`, so serial shell reads can consume stdin while focused GUI
+  windows still receive key events during normal app event loops.
 
 ## Userland And Apps
 
 The tree already contains separate assembly app sources under `programs/apps/`
-for `hello`, `loop`, `fault`, `shell`, `editor`, `monitor`, `win`, and
-`panel`. The build embeds flat app blobs into the kernel and exposes them
-through bootfs/VFS under `/kolibri/<name>`.
+for `hello`, `loop`, `fault`, `shell`, `editor`, `monitor`, `win`, `panel`,
+and `clock`. The build embeds flat app blobs into the kernel and exposes them
+through bootfs/VFS under `/kolibri/<name>`. The first boot app is `panel`,
+which owns the taskbar window and launches other apps.
+
+`clock` and `editor` are windowed apps. The editor is deliberately minimal: it
+loads `/tmp/note`, draws the visible prefix in its window, appends printable
+input, handles backspace/newline, saves with ctrl-s, and closes with ctrl-q or
+the title-bar close button. `shell` and `monitor` still use serial I/O.
 
 There is no `programs/libkarm`, `programs/libkarmdesk`, or `programs/libkarmgui`
 yet. Current apps call syscalls directly from AArch64 assembly.
@@ -106,11 +115,10 @@ before returning `ERR_AGAIN`.
 - Windows do not have separate backing buffers; drawing writes to the global
   framebuffer path.
 - Redraw and expose handling are still demo-level.
-- Close and resize events are defined but not routed from decorations.
-  (Close is now produced by the title-bar close button; resize is still
-  unproduced.)
-- There are no titlebar buttons, minimize/maximize, or taskbar-owned focus
-  controls yet.
+- Title-bar close clicks are routed as `GUI_EVENT_CLOSE` for titled windows,
+  but resize events are only defined in the ABI and are not produced yet.
+- There are no titlebar buttons beyond close; minimize/maximize and
+  taskbar-owned focus controls are not implemented yet.
 - Text drawing is not clipped per glyph.
 - Mouse event coordinates are absolute framebuffer coordinates, not a final
   normalized event ABI.

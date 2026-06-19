@@ -25,15 +25,6 @@ hello_image_header:
 .type hello_start, %function
 
 hello_start:
-    mov x8, #3                    // sys_getpid
-    svc #0
-    cmp x0, #1
-    b.eq 1f
-    mov x0, #1
-    mov x8, #1                    // sys_exit
-    svc #0
-
-1:
     mov x0, #1                    // fd = stdout
     adr x1, hello_msg
     mov x2, hello_msg_len

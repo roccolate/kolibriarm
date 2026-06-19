@@ -345,7 +345,11 @@ panel_redraw_button:
     mov x8, #SYS_WINDOW_DRAW_RECT
     svc #0
 
-    // Label.
+    // Label. panel_label_ptr clobbers x1/x2, so calculate syscall
+    // coordinates after resolving the string pointer.
+    mov x0, x26
+    bl panel_label_ptr
+    mov x4, x0
     mov x0, x19
     mov x1, x25
     add x1, x1, #8
@@ -353,13 +357,6 @@ panel_redraw_button:
     add x2, x2, #6
     movz x3, #0xffe0, lsl #16
     movk x3, #0xe8f0
-    mov x0, x26
-    bl panel_label_ptr
-    mov x4, x0
-    mov x0, x19
-    mov x1, x1
-    mov x2, x2
-    mov x3, x3
     mov x8, #SYS_WINDOW_DRAW_TEXT
     svc #0
 
@@ -526,6 +523,7 @@ panel_refresh_loop:
     mul x10, x10, x23
     add x9, x9, x10                     // x9 = &entry
     ldr w11, [x9]                       // entry.pid
+    mov w21, w11                        // preserve pid across SVC
     cmp w11, w25
     b.eq panel_refresh_skip              // skip self
     cbz w11, panel_refresh_skip          // skip empty slots
@@ -544,7 +542,7 @@ panel_refresh_loop:
     mul x10, x10, x24
     add x11, x28, #OFF_RUNNING
     add x11, x11, x10
-    str w11, [x11]
+    str w21, [x11]
     str w12, [x11, #4]
 
     // Copy the app name (16 bytes, null-terminated) from the proclist
@@ -659,12 +657,13 @@ panel_on_click_button:
     mov x14, sp                         // x14 = path base (stable across writes)
     adr x0, panel_path_prefix
     mov x1, x14
-    bl panel_strcpy_to                  // copies "/kolibri/" to [x1], x1 returns past end
+    bl panel_strcpy_to                  // x0 returns past copied prefix
 
+    mov x1, x0
     mov x0, x11
-    mov x1, x1
     bl panel_append                     // appends app name
-    mov x0, #0
+    mov x1, x0
+    mov w0, #0
     strb w0, [x1]
 
     mov x0, x14

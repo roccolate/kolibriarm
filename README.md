@@ -24,19 +24,21 @@ KolibriARM is a bare-metal operating system for ARM64 (AArch64) processors, writ
 
 ## Current Status
 
-> **Pre-alpha foundations plus separate EL0 app blobs.** The kernel boots on
-> QEMU `virt`, brings up memory management, enables an identity-mapped MMU,
-> runs EL0 demo processes with syscall and timer-IRQ context switches, and
-> drops into a minimal `k>` debug console and an EL0 `u>` demo prompt. With
-> `make qemu-blk`, QEMU boots with a generated FAT32 virtio-blk image and
-> reloads apps through the VFS path.
+> **Pre-alpha foundations plus a first graphical desktop.** The kernel boots
+> on QEMU `virt`, brings up memory management, enables an identity-mapped MMU,
+> runs EL0 app processes with syscall and timer-IRQ context switches, and
+> keeps the minimal `k>` debug console as a fallback. With `make qemu-blk`,
+> QEMU boots with a generated FAT32 virtio-blk image and reloads apps through
+> the VFS path.
 >
 > The "userland" today is a small set of flat AArch64 assembly app images
 > under `programs/apps/`, embedded through bootfs and exposed under
 > `/kolibri/<name>`. The GUI is an experimental kernel compositor with early
-> per-process window ownership. This is the foundation; the next milestone is
-> a real graphical desktop. See [ROADMAP.md](ROADMAP.md) for the honest state
-> and the path forward.
+> per-process window ownership, a panel process, cursor/focus/drag handling,
+> and a few windowed apps. It is close to an alpha desktop, but not there yet:
+> shell and monitor are still serial apps, redraw/expose handling is rough, and
+> interactive QEMU checks still need to be made reliable. See
+> [ROADMAP.md](ROADMAP.md) for the honest state and the path forward.
 
 | Component         | Status       | Notes                                  |
 |-------------------|-------------|----------------------------------------|
@@ -47,12 +49,12 @@ KolibriARM is a bare-metal operating system for ARM64 (AArch64) processors, writ
 | IRQ dispatch      | Working      | GICv2, timer PPI, UART RX, C handler table |
 | UART driver       | Working      | PL011 TX polling, RX IRQ ring, QEMU console input echo |
 | Syscalls          | Working      | process, memory, VFS, IPC, info, early window syscalls |
-| Userland          | Demo apps    | Flat asm apps under `programs/apps/`; no C userland libraries yet |
+| Userland          | Early apps   | Flat asm apps under `programs/apps/`; no C userland libraries yet |
 | Framebuffer       | Working      | virtio-gpu scanout, primitives, bitmap text, alpha |
 | Storage           | Working      | virtio-blk sector read/write, FAT32 read + limited overwrite |
 | Filesystem        | Working      | Fixed VFS, bootfs seed, tmpfs, FAT32 root 8.3 lookup |
-| GUI               | Experimental | Kernel compositor has window ownership, focus, cursor, drag, and early window syscalls |
-| Mouse / cursor    | Partial      | virtio-input events are routed to the GUI demo and window event queues |
+| GUI               | Experimental | Kernel compositor has window ownership, focus, cursor, drag, title-bar close, and early window syscalls |
+| Mouse / cursor    | Partial      | virtio-input and UART command events are routed to the GUI and window event queues |
 | Networking        | Working      | from-scratch virtio-net + DHCP, polled by the console thread |
 | RPi 4 port        | Builds       | Not booted on real hardware yet |
 
@@ -64,13 +66,15 @@ The current milestone is **Phase 10 — a real desktop**. Read
 - [x] Split `programs/user_demo.S` into one binary per app under
       `programs/apps/`, registered by name in the loader and exposed under
       `/kolibri/<name>`.
-- [ ] Add window syscalls (`sys_window_create`, `sys_window_draw_text`,
-      `sys_window_event`, `sys_window_close`) with per-process ownership.
-- [ ] Consume the queued mouse events: visible cursor, click-to-raise,
+- [x] Add window syscalls (`sys_window_create`, `sys_window_draw_text`,
+      `sys_window_event`, `sys_window_destroy`) with per-process ownership.
+- [x] Consume the queued mouse events: visible cursor, click-to-raise,
       window drag, focus visualization.
-- [ ] Add a panel process that owns the taskbar and launches apps by
+- [x] Add a panel process that owns the taskbar and launches apps by
       clicking icons.
-- [ ] Ship four real apps: `shell`, `editor`, `monitor`, `clock`.
+- [ ] Ship four real apps: `shell`, `editor`, `monitor`, `clock`
+      as windowed desktop apps. `editor` and `clock` are windowed now;
+      `shell` and `monitor` still use the serial surface.
 - [ ] Port KolibriOS's 8x8 font and (eventually) the `KOS` flat format.
 
 Out of scope until the desktop is real:
