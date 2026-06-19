@@ -48,10 +48,10 @@ static uint64_t user_demo_stack_vaddr(uint32_t slot) {
 }
 
 static int load_named_image(const char *name, user_image_t *image,
-                            uint32_t slot) {
+                            uint32_t slot, uint32_t entry_index) {
     if (user_image_load_bootfs_flat(image, name, name,
                                     (uint64_t)(uintptr_t)g_user_image_slots[slot],
-                                    USER_IMAGE_SLOT_SIZE, 0) != 0) {
+                                    USER_IMAGE_SLOT_SIZE, entry_index) != 0) {
         return -1;
     }
 
@@ -145,8 +145,6 @@ int user_demo_spawn_vfs(const char *path, uint32_t entry_index) {
     const char *app_name;
     size_t name_len;
 
-    (void)entry_index;
-
     if (path == 0 || g_spawn_memory_size == 0) {
         return -1;
     }
@@ -178,7 +176,7 @@ int user_demo_spawn_vfs(const char *path, uint32_t entry_index) {
         return -1;
     }
 
-    if (load_named_image(app_name, &image, slot) != 0) {
+    if (load_named_image(app_name, &image, slot, entry_index) != 0) {
         process_release(process);
         return -1;
     }
@@ -215,7 +213,7 @@ uint64_t user_demo_run(uint64_t memory_base, uint64_t memory_size,
         return 1;
     }
 
-    if (load_named_image(USER_DEMO_BOOT_APP, &shell_image, slot) != 0) {
+    if (load_named_image(USER_DEMO_BOOT_APP, &shell_image, slot, 0) != 0) {
         process_release(shell);
         uart_puts("USER demo: image load failed\n");
         return 1;

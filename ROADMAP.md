@@ -26,15 +26,14 @@ processes with their own process state, user stack, and page table.
 The GUI is an experimental kernel compositor with per-process window
 ownership, focus, cursor state, click-to-raise, window dragging, title bars,
 and title-bar close events. The desktop starts empty; the panel owns the
-taskbar window and launches apps. `clock` and `editor` are windowed apps now.
-`shell` and `monitor` still use the serial surface.
+taskbar window and launches apps. `shell`, `clock`, `editor`, and `monitor`
+are windowed apps now.
 
 This is close to an alpha desktop foundation, but it is not a complete alpha
 yet. The remaining blockers are practical: make the interactive QEMU launch
-and close checks reliable, move `shell` and `monitor` into windows or define
-that they are debug/serial tools, decide the first redraw/expose rule that
-survives overlapping windows, and keep the app ABI small enough to replace
-direct assembly syscalls with a tiny userland library later.
+and close checks reliable, decide the first redraw/expose rule that survives
+overlapping windows, and keep the app ABI small enough to replace direct
+assembly syscalls with a tiny userland library later.
 
 ### Foundations that are actually in place
 
@@ -62,13 +61,13 @@ direct assembly syscalls with a tiny userland library later.
 
 - The app ABI is still direct AArch64 assembly syscalls; there is no C
   userland helper library yet.
-- The shell has a small command parser and `run <name>`, but no real argv
-  passing and no desktop window.
+- The shell owns a window and supports a small command set, but it has no real
+  argv passing, scrollback, cursor rendering, or terminal emulation.
 - The editor owns a window and edits `/tmp/note`, but it is intentionally
   minimal: no cursor rendering, no scrolling, no arrow movement, and only the
   first screenful is drawn.
-- The monitor reads `sys_proclist`/`sys_meminfo`, but it is still a serial app
-  rather than a desktop window.
+- The monitor owns a window and draws a compact `sys_proclist`/`sys_meminfo`
+  view, but it still has only the simplest fixed layout.
 - Window redraw is still whole-desktop and demo-level; there are no per-window
   backing buffers or damage rectangles yet.
 - Resize is defined in the event ABI but not produced. Minimize/maximize and
@@ -121,8 +120,9 @@ Exit criteria:
 
 Exit criteria:
 - [ ] Cursor visible in `make qemu-fb-visible` and tracks the mouse.
-- [ ] `ps` shows the cursor position read from kernel state.
-- [ ] Click on a window raises it; click on the desktop deselects.
+- [x] `ps` shows the cursor position read from kernel state.
+- [x] Click on a window raises it above overlapping windows.
+- [x] Click on the desktop deselects the focused window.
 
 ### Phase 10.2 — Window manager (per-process)
 
@@ -143,8 +143,8 @@ Exit criteria:
 
 Exit criteria:
 - [ ] Two apps, two windows, each redraws only its own region on key event.
-- [ ] A crashed app's window stays around until the user closes it.
-- [ ] A moving drag updates the window in real time at host-testable speed.
+- [x] A crashed app's window stays around until the user closes it.
+- [x] A moving drag updates the window in real time at host-testable speed.
 
 ### Phase 10.3 — Desktop shell and taskbar
 
@@ -168,13 +168,14 @@ Exit criteria:
 
 Each app is a small flat binary that owns one window and reacts to events.
 
-- `shell` — parses a small command set and supports `run <name>` for any
-  registered app. It still ignores trailing args and still uses serial I/O.
+- `shell` — owns one window, parses a small command set, and supports
+  `run <name>` for any registered app. It still ignores trailing args and uses
+  a fixed line display rather than terminal emulation.
 - `editor` — owns one window, appends printable input, supports backspace and
   newline, saves `/tmp/note` with ctrl-s, and closes with ctrl-q or title-bar
   close. Cursor movement and scrolling are not implemented yet.
-- `monitor` — reads the process list and free-page count every loop, but still
-  renders to serial instead of a desktop window.
+- `monitor` — owns one window and redraws process, free-page, and tick data
+  from the existing process/info syscalls.
 - `clock` — owns one window and redraws time from the existing timer ticks.
 
 Exit criteria:
@@ -194,13 +195,15 @@ Exit criteria:
 - Sticky key handling for the shell (`up` arrow recalls the previous line).
 
 Exit criteria:
-- [ ] Visible title bars with text on every app window.
 - [x] Visible title bars with text on every app window that opts in via
-      `sys_window_set_title(window_id, title_ptr, title_h)`. `clock` and
-      `editor` are current opt-ins. The panel stays a bar without title text
-      so its 32 px height can keep all launcher buttons.
-- [ ] Cursor changes shape over clickable decorations (hand on icon, arrow
-      on text).
+      `sys_window_set_title(window_id, title_ptr, title_h)`. `shell`,
+      `editor`, `monitor`, and `clock` are current opt-ins. The panel stays a
+      bar without title text so its 32 px height can keep all launcher
+      buttons.
+- [x] Cursor changes shape over kernel title decorations (hand over title
+      bar/close box, arrow elsewhere).
+- [x] Cursor changes shape over taskbar launcher buttons through
+      `sys_cursor_set_shape(0=arrow, 1=hand)`.
 - [ ] Building from a KolibriOS `.kos` demo file works for at least hello.
 
 ---
@@ -213,8 +216,8 @@ candidates, in rough order of return on effort:
 - **Per-window backing buffers or damage tracking (deferred).** Today's
   compositor repaints the full desktop on every dirty tick, which is
   visually fine for move/drag and for apps that repaint their whole
-  content area (clock and editor do this now; future windowed apps must do
-  the same until the rule changes). It
+  content area (shell, clock, editor, and monitor do this now; future windowed
+  apps must do the same until the rule changes). It
   becomes fragile only when an app relies on partial updates that
   overlap with another window's redraw between ticks. Implement the
   first concrete case of that breakage before designing the

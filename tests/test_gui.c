@@ -2,6 +2,7 @@
 
 #include "unity/unity.h"
 #include "../kernel/gui.h"
+#include "../kernel/process.h"
 
 static uint32_t g_test_gui_pixels[640U * 480U];
 
@@ -191,6 +192,25 @@ void test_gui_cursor_move_clamps_to_bounds(void) {
     TEST_ASSERT_EQUAL_UINT64(3, (uint64_t)y);
 }
 
+void test_gui_draw_renders_16x16_cursor_over_desktop(void) {
+    uint32_t pixels[400] = { 0 };
+    fb_t fb;
+    gui_desktop_t desktop;
+
+    TEST_ASSERT_EQUAL_UINT64(16, (uint64_t)GUI_CURSOR_W);
+    TEST_ASSERT_EQUAL_UINT64(16, (uint64_t)GUI_CURSOR_H);
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)fb_init(&fb, pixels, 20, 20, 20));
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_init(&desktop, &fb, 0xff606060U));
+
+    gui_set_cursor(&desktop, 1, 1);
+    gui_draw(&desktop);
+
+    TEST_ASSERT_EQUAL_UINT64(0xff101010U, pixels[1 * 20 + 1]);
+    TEST_ASSERT_EQUAL_UINT64(0xffe0e0e0U, pixels[3 * 20 + 2]);
+    TEST_ASSERT_TRUE(pixels[19 * 20 + 19] != 0);
+}
+
 void test_gui_left_click_raises_window_under_cursor(void) {
     uint32_t pixels[64] = { 0 };
     fb_t fb;
@@ -222,7 +242,7 @@ void test_gui_left_click_raises_window_under_cursor(void) {
     TEST_ASSERT_EQUAL_UINT64(first, desktop.focused_window_id);
 }
 
-void test_gui_left_click_on_background_keeps_focus(void) {
+void test_gui_left_click_on_background_clears_focus(void) {
     uint32_t pixels[64] = { 0 };
     fb_t fb;
     gui_desktop_t desktop;
@@ -236,11 +256,11 @@ void test_gui_left_click_on_background_keeps_focus(void) {
                                  &desktop, 0, 0, 2, 2, 0, 0, &only));
     TEST_ASSERT_EQUAL_UINT64(only, desktop.focused_window_id);
 
-    /* Cursor over empty desktop: left click must not change focus and
+    /* Cursor over empty desktop: left click must clear focus and
      * must not deliver a click event to the existing window. */
     gui_set_cursor(&desktop, 7, 7);
     gui_cursor_button(&desktop, 0, 1);
-    TEST_ASSERT_EQUAL_UINT64(only, desktop.focused_window_id);
+    TEST_ASSERT_EQUAL_UINT64(GUI_NO_WINDOW, desktop.focused_window_id);
     TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)desktop.windows[only].event_count);
     TEST_ASSERT_EQUAL_UINT64((uint64_t)GUI_BUTTON_LEFT,
                              (uint64_t)desktop.cursor.buttons_mask);
@@ -541,6 +561,73 @@ void test_gui_title_bar_paints_bar_and_text(void) {
     TEST_ASSERT_EQUAL_UINT64(0xff0000aaU, pixels[5 * 8 + 3]);
 }
 
+void test_gui_cursor_shape_changes_over_clickable_title_decoration(void) {
+    uint32_t pixels[20000] = { 0 };
+    fb_t fb;
+    gui_desktop_t desktop;
+    uint32_t titled;
+    uint32_t cover;
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)fb_init(&fb, pixels, 200, 100, 200));
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_init(&desktop, &fb, 0xff101010U));
+    desktop.cursor.visible = 0;
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_create_window_for_pid(
+                                 &desktop, 7U, 20, 10, 100, 60, 0xff0000aaU,
+                                 0xff808080U, "demo", &titled));
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_set_window_title_bar(
+                                 &desktop, titled, 12U));
+
+    gui_set_cursor(&desktop, 30, 30);
+    TEST_ASSERT_EQUAL_UINT64(GUI_CURSOR_ARROW,
+                             (uint64_t)desktop.cursor.shape);
+
+    gui_set_cursor(&desktop, 30, 15);
+    TEST_ASSERT_EQUAL_UINT64(GUI_CURSOR_HAND,
+                             (uint64_t)desktop.cursor.shape);
+
+    gui_set_cursor(&desktop, 180, 80);
+    TEST_ASSERT_EQUAL_UINT64(GUI_CURSOR_ARROW,
+                             (uint64_t)desktop.cursor.shape);
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_create_window(
+                                 &desktop, 25, 12, 20, 20, 0xff00aa00U,
+                                 0xff404040U, &cover));
+    (void)cover;
+
+    gui_set_cursor(&desktop, 30, 15);
+    TEST_ASSERT_EQUAL_UINT64(GUI_CURSOR_ARROW,
+                             (uint64_t)desktop.cursor.shape);
+}
+
+void test_gui_set_cursor_shape_rejects_unknown_shapes(void) {
+    uint32_t pixels[16] = { 0 };
+    fb_t fb;
+    gui_desktop_t desktop;
+
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)fb_init(&fb, pixels, 4, 4, 4));
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_init(&desktop, &fb, 0xff101010U));
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_set_cursor_shape(
+                                 &desktop, GUI_CURSOR_HAND));
+    TEST_ASSERT_EQUAL_UINT64(GUI_CURSOR_HAND,
+                             (uint64_t)desktop.cursor.shape);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
+                             (uint64_t)gui_set_cursor_shape(&desktop, 99U));
+    TEST_ASSERT_EQUAL_UINT64(GUI_CURSOR_HAND,
+                             (uint64_t)desktop.cursor.shape);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
+                             (uint64_t)gui_set_cursor_shape(0,
+                                                            GUI_CURSOR_ARROW));
+}
+
 void test_gui_set_title_bar_rejects_height_larger_than_window(void) {
     uint32_t pixels[16] = { 0 };
     fb_t fb;
@@ -596,6 +683,9 @@ void test_gui_close_button_pushed_event_on_title_bar_click(void) {
     input_event_t press;
     gui_event_t event;
 
+    process_table_init();
+    TEST_ASSERT_NOT_NULL(process_alloc(7U, "demo"));
+
     TEST_ASSERT_EQUAL_UINT64(0,
                              (uint64_t)fb_init(&fb, g_test_gui_pixels,
                                                640, 480, 640));
@@ -629,6 +719,80 @@ void test_gui_close_button_pushed_event_on_title_bar_click(void) {
         0, (uint64_t)gui_window_pop_event(
                &desktop->windows[window_id], &event));
     TEST_ASSERT_EQUAL_UINT64(GUI_EVENT_CLOSE, event.type);
+}
+
+void test_gui_close_button_destroys_window_for_dead_owner(void) {
+    fb_t fb;
+    gui_desktop_t *desktop;
+    uint32_t window_id;
+    input_event_t press;
+    process_t *owner;
+
+    process_table_init();
+    owner = process_alloc(7U, "demo");
+    TEST_ASSERT_NOT_NULL(owner);
+    process_mark_exited(owner, 0x33U);
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)fb_init(&fb, g_test_gui_pixels,
+                                               640, 480, 640));
+    gui_init_for_framebuffer(&fb, 0);
+    desktop = gui_desktop();
+    TEST_ASSERT_NOT_NULL(desktop);
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_create_window_for_pid(
+                                 desktop, 7U, 0, 0, 80, 80, 0xff0000aaU,
+                                 0xff808080U, "demo", &window_id));
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_set_window_title_bar(
+                                 desktop, window_id, 12U));
+
+    gui_set_cursor(desktop, 72, 6);
+    press = (input_event_t){
+        .type = INPUT_EVENT_MOUSE_BUTTON,
+        .timestamp = 0,
+        .data.mouse_button = { .button = 0U, .pressed = 1U },
+    };
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)gui_handle_input(&press));
+
+    TEST_ASSERT_EQUAL_UINT64(0U, desktop->windows[window_id].used);
+    TEST_ASSERT_EQUAL_UINT64(0U, desktop->windows[window_id].event_count);
+}
+
+void test_gui_close_button_destroys_window_for_reclaimed_owner(void) {
+    fb_t fb;
+    gui_desktop_t *desktop;
+    uint32_t window_id;
+    input_event_t press;
+
+    process_table_init();
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)fb_init(&fb, g_test_gui_pixels,
+                                               640, 480, 640));
+    gui_init_for_framebuffer(&fb, 0);
+    desktop = gui_desktop();
+    TEST_ASSERT_NOT_NULL(desktop);
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_create_window_for_pid(
+                                 desktop, 7U, 0, 0, 80, 80, 0xff0000aaU,
+                                 0xff808080U, "demo", &window_id));
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_set_window_title_bar(
+                                 desktop, window_id, 12U));
+
+    gui_set_cursor(desktop, 72, 6);
+    press = (input_event_t){
+        .type = INPUT_EVENT_MOUSE_BUTTON,
+        .timestamp = 0,
+        .data.mouse_button = { .button = 0U, .pressed = 1U },
+    };
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)gui_handle_input(&press));
+
+    TEST_ASSERT_EQUAL_UINT64(0U, desktop->windows[window_id].used);
+    TEST_ASSERT_EQUAL_UINT64(0U, desktop->windows[window_id].event_count);
 }
 
 void test_gui_close_button_click_outside_box_starts_drag(void) {
@@ -706,6 +870,37 @@ void test_gui_focus_window_switches_to_target(void) {
                              (uint64_t)gui_focus_window(
                                  &desktop, GUI_MAX_WINDOWS));
     TEST_ASSERT_EQUAL_UINT64(second, desktop.focused_window_id);
+}
+
+void test_gui_focus_window_raises_target_above_overlap(void) {
+    uint32_t pixels[64] = { 0 };
+    fb_t fb;
+    gui_desktop_t desktop;
+    uint32_t first;
+    uint32_t second;
+
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)fb_init(&fb, pixels, 8, 8, 8));
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_init(&desktop, &fb, 0xff101010U));
+    desktop.cursor.visible = 0;
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_create_window(
+                                 &desktop, 1, 1, 5, 5, 0xff0000aaU,
+                                 0xff3030ffU, &first));
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_create_window(
+                                 &desktop, 2, 2, 5, 5, 0xff00aa00U,
+                                 0xff30ff30U, &second));
+
+    gui_draw(&desktop);
+    TEST_ASSERT_EQUAL_UINT64(0xff00aa00U, pixels[3 * 8 + 3]);
+    TEST_ASSERT_EQUAL_UINT64(second, (uint32_t)gui_hit_test(&desktop, 3, 3));
+
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)gui_focus_window(&desktop, first));
+    gui_draw(&desktop);
+    TEST_ASSERT_EQUAL_UINT64(0xff0000aaU, pixels[3 * 8 + 3]);
+    TEST_ASSERT_EQUAL_UINT64(first, (uint32_t)gui_hit_test(&desktop, 3, 3));
 }
 
 void test_gui_window_for_pid_returns_owner_windows(void) {

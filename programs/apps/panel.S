@@ -27,6 +27,7 @@
 #define SYS_WINDOW_DESTROY  71
 #define SYS_WINDOW_FOCUS     77
 #define SYS_WINDOW_FOR_PID   78
+#define SYS_CURSOR_SET_SHAPE 79
 
 // Geometry constants for a 640x480 virtio-gpu framebuffer.
 .equ SCREEN_W,      640
@@ -48,6 +49,8 @@
 // Background pollig cadence: refresh once every REFRESH_PERIOD loop
 // iterations so each poll costs us only ~1% of CPU.
 .equ REFRESH_PERIOD, 100
+.equ CURSOR_ARROW,   0
+.equ CURSOR_HAND,    1
 
 // Layout offsets within the panel stack frame (set up in panel_start).
 .equ OFF_RUNNING,    0
@@ -710,6 +713,19 @@ panel_on_move:
     // (hovered), if each is in range. The empty-slot repaints reuse
     // the helper to keep one source of truth for button geometry.
     str w9, [sp, #16 + OFF_HOVER]
+
+    // Tell the kernel whether the EL0-drawn launcher row is clickable
+    // under the current cursor. Kernel-owned title decorations handle
+    // this internally; app-owned controls need this explicit hint.
+    mov x0, #CURSOR_ARROW
+    cmp w9, #0
+    b.lt 10f
+    cmp w9, #BTN_COUNT
+    b.ge 10f
+    mov x0, #CURSOR_HAND
+10:
+    mov x8, #SYS_CURSOR_SET_SHAPE
+    svc #0
 
     // Old button: clear hover highlight.
     cmp w10, #0

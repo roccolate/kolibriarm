@@ -5,7 +5,7 @@ are not a promise of long-term binary compatibility yet.
 
 ## Live Window Syscalls
 
-The live window range is `70..76`. Do not reuse `60..69`; `60` and `61` are
+The live window range is `70..79`. Do not reuse `60..69`; `60` and `61` are
 already used by fixed-message IPC.
 
 | # | Name | Arguments | Return |
@@ -19,12 +19,14 @@ already used by fixed-message IPC.
 | 76 | `sys_window_redraw` | `x0=window_id` | 0 / error |
 | 77 | `sys_window_focus` | `x0=window_id` | 0 / error |
 | 78 | `sys_window_for_pid` | `x0=owner_pid, x1=index` | window id / `ERR_NOENT` |
+| 79 | `sys_cursor_set_shape` | `x0=shape` | 0 / error |
 
 All draw / destroy / set-title window syscalls require the caller to own the
 target window. The kernel checks `gui_window_t.owner_pid` against the current
 process pid. The two new syscalls `sys_window_focus` and `sys_window_for_pid`
 are deliberately callable from any pid so the desktop taskbar (which does not
-own app windows) can raise and enumerate them.
+own app windows) can raise and enumerate them. `sys_cursor_set_shape` lets
+EL0-drawn controls request `0=arrow` or `1=hand`.
 
 ## Event Buffer
 
@@ -64,6 +66,8 @@ produce them from decorations.
   to window-local coordinates for apps.
 - Drawing syscalls operate immediately and directly; there is no draw-list
   submission or per-window back buffer yet.
+- Cursor shape hints are global and minimal; there is no per-window cursor
+  region registry yet.
 - The optional `title_h` argument of `sys_window_set_title` is silently
   ignored (`title_h == 0`) by apps that pre-date the title bar feature; the
   kernel still validates `title_h >= window->h`.
@@ -75,8 +79,6 @@ Window management still needs:
 - `sys_window_get_bounds`
 - `sys_window_set_bounds` or separate move/resize calls
 - `sys_window_show` and `sys_window_hide`
-- `sys_window_focus` (implemented as syscall 77, raises a window by id)
-- `sys_window_for_pid` (implemented as syscall 78, enumerates owner windows)
 - `sys_window_flush` with an explicit dirty rectangle
 - close/minimize/maximize decoration events
 - process-exit cleanup or orphan-window policy

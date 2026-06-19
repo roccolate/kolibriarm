@@ -139,6 +139,7 @@ Current limitations:
 | 76 | `sys_window_redraw` | `x0=window_id` | 0 / error | Mark the demo GUI desktop dirty |
 | 77 | `sys_window_focus` | `x0=window_id` | 0 / error | Raise/focus a window by id (callable from any pid, not just the owner) |
 | 78 | `sys_window_for_pid` | `x0=owner_pid, x1=index` | window id / `ERR_NOENT` | Return the index-th window owned by the given pid, or `ERR_NOENT` when none |
+| 79 | `sys_cursor_set_shape` | `x0=shape` | 0 / error | Request the global cursor shape (`0=arrow`, `1=hand`) |
 
 Current limitations:
 - These syscalls are the early desktop ABI, not a stable long-term ABI.
@@ -150,6 +151,9 @@ Current limitations:
   `uint32_t type, int32_t data1, int32_t data2`.
 - `sys_window_event` yields for a bounded number of scheduler turns and returns
   `ERR_AGAIN` when no event arrives.
+- A title-bar close click queues `GUI_EVENT_CLOSE` for a live owner. If the
+  owner process has already exited or been reclaimed, the kernel destroys the
+  window directly instead.
 - `sys_window_set_title` accepts an optional `x2=title_h`. `title_h` of 0 keeps
   the legacy no-title-bar behaviour (default for apps that pre-date this
   argument). Non-zero `title_h` asks the kernel to paint a solid bar at the top
@@ -157,12 +161,16 @@ Current limitations:
   `title_h >= window->h` with `ERR_INVAL`. Owner drawing through
   `SYS_WINDOW_DRAW_RECT/TEXT` is shifted down by `title_h` so apps keep a
   0-based content coordinate space below the bar.
-- `sys_window_focus` only updates the focus border; it does not change the
-  existing z-order (windows are drawn in creation order). Raising a
-  partially obscured window requires a future z-order rearrangement API.
+- `sys_window_focus` updates the focus border and raises the target window
+  above other windows by bumping its z-order. Window ids remain stable pool
+  indices; z-order changes do not move window structs.
 - `sys_window_for_pid` skips ownerless windows (those whose
   `owner_pid == GUI_NO_OWNER`); only windows actually owned by a process
   are visible through it.
+- `sys_cursor_set_shape` is the first app-owned control hint. The kernel
+  updates cursor shape itself over kernel title decorations; EL0-drawn
+  controls such as panel launcher buttons can request `GUI_CURSOR_HAND`
+  while hovered and `GUI_CURSOR_ARROW` when the hover leaves.
 - Drawing still writes through the current kernel framebuffer path; there is no
   per-window backing buffer or explicit flush rectangle yet.
 
@@ -257,7 +265,7 @@ Planned `open` flags:
 ### Planned GUI / Window System Extensions
 
 The live GUI range starts at 70. Future GUI numbers should be assigned after
-the current 70-76 ABI is cleaned up; do not move GUI calls into 60-69 because
+the current 70-79 ABI is cleaned up; do not move GUI calls into 60-69 because
 that range is already used for IPC.
 
 Planned but not implemented yet:
@@ -267,7 +275,6 @@ Planned but not implemented yet:
 | `sys_window_get_bounds` | Read current window bounds |
 | `sys_window_set_bounds` | Move and/or resize a window |
 | `sys_window_show` / `sys_window_hide` | Toggle visibility |
-| `sys_window_focus` | Request focus/raise |
 | `sys_window_flush` | Flush an explicit dirty rectangle |
 | `sys_draw_line` | Draw a clipped line in a window |
 | `sys_draw_bitmap` | Blit a bitmap into a window |

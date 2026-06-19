@@ -36,8 +36,8 @@ KolibriARM is a bare-metal operating system for ARM64 (AArch64) processors, writ
 > `/kolibri/<name>`. The GUI is an experimental kernel compositor with early
 > per-process window ownership, a panel process, cursor/focus/drag handling,
 > and a few windowed apps. It is close to an alpha desktop, but not there yet:
-> shell and monitor are still serial apps, redraw/expose handling is rough, and
-> interactive QEMU checks still need to be made reliable. See
+> redraw/expose handling is rough and interactive QEMU checks still need to be
+> made reliable. See
 > [ROADMAP.md](ROADMAP.md) for the honest state and the path forward.
 
 | Component         | Status       | Notes                                  |
@@ -54,7 +54,7 @@ KolibriARM is a bare-metal operating system for ARM64 (AArch64) processors, writ
 | Storage           | Working      | virtio-blk sector read/write, FAT32 read + limited overwrite |
 | Filesystem        | Working      | Fixed VFS, bootfs seed, tmpfs, FAT32 root 8.3 lookup |
 | GUI               | Experimental | Kernel compositor has window ownership, focus, cursor, drag, title-bar close, and early window syscalls |
-| Mouse / cursor    | Partial      | virtio-input and UART command events are routed to the GUI and window event queues |
+| Mouse / cursor    | Partial      | virtio-input and UART command events are routed to the GUI; cursor switches to hand over title decorations and panel buttons |
 | Networking        | Working      | from-scratch virtio-net + DHCP, polled by the console thread |
 | RPi 4 port        | Builds       | Not booted on real hardware yet |
 
@@ -72,9 +72,8 @@ The current milestone is **Phase 10 — a real desktop**. Read
       window drag, focus visualization.
 - [x] Add a panel process that owns the taskbar and launches apps by
       clicking icons.
-- [ ] Ship four real apps: `shell`, `editor`, `monitor`, `clock`
-      as windowed desktop apps. `editor` and `clock` are windowed now;
-      `shell` and `monitor` still use the serial surface.
+- [x] Ship four real apps: `shell`, `editor`, `monitor`, `clock`
+      as windowed desktop apps.
 - [ ] Port KolibriOS's 8x8 font and (eventually) the `KOS` flat format.
 
 Out of scope until the desktop is real:
@@ -128,21 +127,17 @@ make BOARD=qemu_virt
 # Run in QEMU
 make qemu
 
-# At the EL0 shell prompt, try:
+# In the windowed shell, try:
 # help
 # ls
-# ls /fat
 # ps
 # ticks
-# pwd
-# cd /
 # mem
-# cat /tmp/note
-# cat /fat/edit.txt
+# run editor
+# run monitor
+# run clock
 # run hello
 # run loop
-# edit /fat/edit.txt
-# monitor
 # kill last
 # exit
 

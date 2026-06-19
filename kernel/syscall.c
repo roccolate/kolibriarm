@@ -43,6 +43,7 @@
 #define SYS_WINDOW_REDRAW    76ULL
 #define SYS_WINDOW_FOCUS     77ULL
 #define SYS_WINDOW_FOR_PID   78ULL
+#define SYS_CURSOR_SET_SHAPE 79ULL
 #define SYS_TIMEINFO 100ULL
 #define SYS_MEMINFO 101ULL
 #define SYS_PROCLIST 102ULL
@@ -601,6 +602,17 @@ static int64_t sys_window_for_pid(process_t *process, uint64_t owner_pid,
     return (int64_t)window_id;
 }
 
+static int64_t sys_cursor_set_shape(process_t *process, uint64_t shape) {
+    if (process == 0 || shape > UINT32_MAX) {
+        return ERR_INVAL;
+    }
+    if (gui_set_cursor_shape(gui_desktop(), (uint32_t)shape) != 0) {
+        return ERR_INVAL;
+    }
+    gui_request_redraw();
+    return 0;
+}
+
 static int64_t sys_window_event(process_t *process, exception_frame_t *frame,
                                uint64_t window_id, uint64_t buf_ptr,
                                uint64_t buf_count) {
@@ -668,9 +680,9 @@ void syscall_dispatch(exception_frame_t *frame) {
     process_t *current = process_current();
 
     // Drain any pending input before handling this SVC, except when the
-    // caller is actively reading stdin. That lets serial shell reads keep
-    // their bytes while still giving the kernel k> console and focused GUI
-    // windows a chance to process input while an EL0 process holds the CPU.
+    // caller is actively reading stdin. That lets legacy/debug serial reads
+    // keep their bytes while still giving the kernel k> console and focused
+    // GUI windows a chance to process input while an EL0 process holds the CPU.
     // uart_pump_input drains the UART data register directly so piped
     // QEMU input is captured even when the PL011 RX interrupt is
     // masked or pending.
@@ -799,6 +811,9 @@ void syscall_dispatch(exception_frame_t *frame) {
     case SYS_WINDOW_FOR_PID:
         frame->x[0] = (uint64_t)sys_window_for_pid(current, frame->x[0],
                                                    frame->x[1]);
+        break;
+    case SYS_CURSOR_SET_SHAPE:
+        frame->x[0] = (uint64_t)sys_cursor_set_shape(current, frame->x[0]);
         break;
     case SYS_TIMEINFO:
         frame->x[0] = (uint64_t)sys_timeinfo(frame->x[0]);

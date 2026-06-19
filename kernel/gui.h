@@ -8,8 +8,8 @@
 
 #define GUI_MAX_WINDOWS      16U
 #define GUI_NO_WINDOW        0xffffffffU
-#define GUI_CURSOR_W         12
-#define GUI_CURSOR_H         12
+#define GUI_CURSOR_W         16
+#define GUI_CURSOR_H         16
 #define GUI_TITLE_LEN        32U
 /* Kernel-drawn close button inside the title bar. The box is only
  * rendered (and only intercepts clicks) when the window has a
@@ -44,6 +44,10 @@ typedef struct {
     uint32_t bg_color;
     uint32_t border_color;
     uint32_t owner_pid;
+    /* Larger z values are drawn and hit-tested above smaller values.
+     * Window ids remain stable pool indices; focusing raises by bumping
+     * this field, never by moving window structs. */
+    uint32_t z;
     /* Kernel-drawn title bar height in pixels. 0 means no title bar.
      * When set, the kernel paints a solid bar at the top of the window
      * and draws the title text inside it during gui_draw_window. Owner
@@ -72,7 +76,11 @@ typedef struct {
     int32_t prev_y;
     uint8_t buttons_mask;
     uint8_t visible;
+    uint8_t shape;
 } gui_cursor_t;
+
+#define GUI_CURSOR_ARROW 0U
+#define GUI_CURSOR_HAND  1U
 
 /* Bitmask values for gui_cursor_t::buttons_mask. The same numbering is used
  * by input_event_t::mouse_button::button so the GUI does not need to know
@@ -85,6 +93,7 @@ typedef struct {
     fb_t *fb;
     uint32_t background_color;
     uint32_t focused_window_id;
+    uint32_t next_z;
     /* Drag state. drag_window_id == GUI_NO_WINDOW when no drag is active.
      * drag_off_x/off_y is the cursor offset from the window's top-left at
      * the start of the drag; while dragging, gui_drag_update moves the
@@ -134,6 +143,7 @@ int gui_hit_test(gui_desktop_t *desktop, int32_t x, int32_t y);
 int gui_window_contains(gui_window_t *window, int32_t x, int32_t y);
 int gui_dispatch_input(gui_desktop_t *desktop, const input_event_t *event);
 void gui_get_cursor(gui_desktop_t *desktop, int32_t *x, int32_t *y);
+int gui_set_cursor_shape(gui_desktop_t *desktop, uint32_t shape);
 void gui_set_cursor(gui_desktop_t *desktop, int32_t x, int32_t y);
 void gui_cursor_button(gui_desktop_t *desktop, uint32_t button,
                        uint32_t pressed);
@@ -161,4 +171,3 @@ void gui_clear_dirty(void);
 void gui_request_redraw(void);
 
 #endif
-

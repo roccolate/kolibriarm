@@ -3,31 +3,67 @@
 #include <stdint.h>
 
 #include "kernel/font.h"
+#include "kernel/process.h"
 #include "uart/pl011.h"
 
 /*
- * 12x12 arrow cursor.
+ * 16x16 arrow cursor.
  * 0 = transparent, 1 = black outline, 2 = white fill.
  */
 static const uint8_t g_cursor[GUI_CURSOR_H][GUI_CURSOR_W] = {
-    {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-    {1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-    {1, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-    {1, 2, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0},
-    {1, 2, 2, 2, 1, 0, 0, 0, 0, 0, 0, 0},
-    {1, 2, 2, 2, 2, 1, 0, 0, 0, 0, 0, 0},
-    {1, 2, 2, 2, 2, 2, 1, 0, 0, 0, 0, 0},
-    {1, 2, 2, 2, 2, 2, 2, 1, 0, 0, 0, 0},
-    {1, 2, 2, 2, 2, 2, 2, 2, 1, 0, 0, 0},
-    {1, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0},
-    {1, 2, 1, 0, 1, 1, 1, 0, 0, 0, 0, 0},
-    {0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0},
+    {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+    {1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+    {1, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+    {1, 2, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+    {1, 2, 2, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+    {1, 2, 2, 2, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+    {1, 2, 2, 2, 2, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+    {1, 2, 2, 2, 2, 2, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0},
+    {1, 2, 2, 2, 2, 2, 2, 2, 1, 0, 0, 0, 0, 0, 0, 0},
+    {1, 2, 2, 2, 2, 2, 2, 2, 2, 1, 0, 0, 0, 0, 0, 0},
+    {1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 0, 0, 0, 0, 0},
+    {1, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0},
+    {1, 2, 1, 0, 1, 1, 1, 0, 0, 1, 1, 0, 0, 0, 0, 0},
+    {1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0},
+    {0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0},
+    {0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0},
 };
 
-static void gui_draw_cursor(fb_t *fb, int32_t x, int32_t y) {
+/*
+ * 16x16 hand cursor for clickable window decorations.
+ * 0 = transparent, 1 = black outline, 2 = white fill.
+ */
+static const uint8_t g_cursor_hand[GUI_CURSOR_H][GUI_CURSOR_W] = {
+    {0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+    {0, 0, 0, 1, 2, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+    {0, 0, 0, 1, 2, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+    {0, 0, 0, 1, 2, 2, 1, 0, 1, 1, 0, 0, 0, 0, 0, 0},
+    {0, 0, 0, 1, 2, 2, 1, 1, 2, 2, 1, 0, 0, 0, 0, 0},
+    {0, 0, 0, 1, 2, 2, 1, 2, 2, 2, 1, 1, 0, 0, 0, 0},
+    {0, 0, 0, 1, 2, 2, 1, 2, 2, 2, 1, 2, 1, 0, 0, 0},
+    {0, 0, 1, 1, 2, 2, 1, 2, 2, 2, 1, 2, 1, 0, 0, 0},
+    {0, 1, 2, 2, 2, 2, 2, 2, 2, 2, 1, 2, 1, 0, 0, 0},
+    {0, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 0, 0, 0},
+    {0, 0, 1, 2, 2, 2, 2, 2, 2, 2, 2, 1, 0, 0, 0, 0},
+    {0, 0, 1, 2, 2, 2, 2, 2, 2, 2, 2, 1, 0, 0, 0, 0},
+    {0, 0, 0, 1, 2, 2, 2, 2, 2, 2, 1, 0, 0, 0, 0, 0},
+    {0, 0, 0, 1, 2, 2, 2, 2, 2, 2, 1, 0, 0, 0, 0, 0},
+    {0, 0, 0, 0, 1, 2, 2, 2, 2, 1, 0, 0, 0, 0, 0, 0},
+    {0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0},
+};
+
+static int gui_close_box_rect(const gui_window_t *window, uint32_t *out_x,
+                              uint32_t *out_y, uint32_t *out_w,
+                              uint32_t *out_h);
+static void gui_refresh_cursor_shape(gui_desktop_t *desktop);
+
+static void gui_draw_cursor(fb_t *fb, int32_t x, int32_t y, uint8_t shape) {
+    const uint8_t (*bitmap)[GUI_CURSOR_W] =
+        (shape == GUI_CURSOR_HAND) ? g_cursor_hand : g_cursor;
+
     for (uint32_t row = 0; row < GUI_CURSOR_H; row++) {
         for (uint32_t col = 0; col < GUI_CURSOR_W; col++) {
-            uint8_t v = g_cursor[row][col];
+            uint8_t v = bitmap[row][col];
             if (v == 0) {
                 continue;
             }
@@ -47,16 +83,22 @@ int gui_window_contains(gui_window_t *window, int32_t x, int32_t y) {
 }
 
 int gui_hit_test(gui_desktop_t *desktop, int32_t x, int32_t y) {
+    uint32_t best_z = 0;
+    int best = (int)GUI_NO_WINDOW;
+
     if (desktop == 0) {
         return GUI_NO_WINDOW;
     }
-    for (int32_t i = (int32_t)GUI_MAX_WINDOWS - 1; i >= 0; i--) {
+    for (uint32_t i = 0; i < GUI_MAX_WINDOWS; i++) {
         gui_window_t *window = &desktop->windows[i];
         if (gui_window_contains(window, x, y)) {
-            return (int)i;
+            if (best == (int)GUI_NO_WINDOW || window->z >= best_z) {
+                best = (int)i;
+                best_z = window->z;
+            }
         }
     }
-    return GUI_NO_WINDOW;
+    return best;
 }
 
 void gui_get_cursor(gui_desktop_t *desktop, int32_t *x, int32_t *y) {
@@ -69,6 +111,16 @@ void gui_get_cursor(gui_desktop_t *desktop, int32_t *x, int32_t *y) {
     if (y != 0) {
         *y = desktop->cursor.y;
     }
+}
+
+int gui_set_cursor_shape(gui_desktop_t *desktop, uint32_t shape) {
+    if (desktop == 0 ||
+        (shape != GUI_CURSOR_ARROW && shape != GUI_CURSOR_HAND)) {
+        return -1;
+    }
+
+    desktop->cursor.shape = (uint8_t)shape;
+    return 0;
 }
 
 void gui_set_cursor(gui_desktop_t *desktop, int32_t x, int32_t y) {
@@ -91,6 +143,7 @@ void gui_set_cursor(gui_desktop_t *desktop, int32_t x, int32_t y) {
     desktop->cursor.prev_y = desktop->cursor.y;
     desktop->cursor.x = x;
     desktop->cursor.y = y;
+    gui_refresh_cursor_shape(desktop);
 }
 
 void gui_cursor_move(gui_desktop_t *desktop, int32_t dx, int32_t dy) {
@@ -140,6 +193,7 @@ void gui_drag_update(gui_desktop_t *desktop, int32_t cursor_x,
     }
     window->x = (uint32_t)new_x;
     window->y = (uint32_t)new_y;
+    gui_refresh_cursor_shape(desktop);
 }
 
 void gui_drag_end(gui_desktop_t *desktop) {
@@ -162,14 +216,16 @@ void gui_cursor_button(gui_desktop_t *desktop, uint32_t button,
         desktop->cursor.buttons_mask =
             (uint8_t)(desktop->cursor.buttons_mask & (uint8_t)(~mask));
     }
-    /* Only the left button raises the window under the cursor. Right and
-     * middle clicks are recorded in the mask for future use but do not
-     * change focus today. */
+    /* Only the left button affects focus. A left click on a window raises
+     * it; a left click on the desktop clears focus. Right and middle clicks
+     * are recorded in the mask for future use but do not change focus. */
     if (button == 0U && pressed != 0) {
         int32_t hit = gui_hit_test(desktop, desktop->cursor.x,
                                    desktop->cursor.y);
         if ((int32_t)GUI_NO_WINDOW != hit && hit >= 0) {
             gui_focus_window(desktop, (uint32_t)hit);
+        } else {
+            desktop->focused_window_id = GUI_NO_WINDOW;
         }
     }
 }
@@ -182,6 +238,7 @@ int gui_init(gui_desktop_t *desktop, fb_t *fb, uint32_t background_color) {
     desktop->fb = fb;
     desktop->background_color = background_color;
     desktop->focused_window_id = GUI_NO_WINDOW;
+    desktop->next_z = 1;
     desktop->drag_window_id = GUI_NO_WINDOW;
     desktop->drag_off_x = 0;
     desktop->drag_off_y = 0;
@@ -191,6 +248,7 @@ int gui_init(gui_desktop_t *desktop, fb_t *fb, uint32_t background_color) {
     desktop->cursor.prev_y = desktop->cursor.y;
     desktop->cursor.buttons_mask = 0;
     desktop->cursor.visible = 1;
+    desktop->cursor.shape = GUI_CURSOR_ARROW;
     for (uint32_t i = 0; i < GUI_MAX_WINDOWS; i++) {
         desktop->windows[i].x = 0;
         desktop->windows[i].y = 0;
@@ -199,6 +257,7 @@ int gui_init(gui_desktop_t *desktop, fb_t *fb, uint32_t background_color) {
         desktop->windows[i].bg_color = 0;
         desktop->windows[i].border_color = 0;
         desktop->windows[i].owner_pid = GUI_NO_OWNER;
+        desktop->windows[i].z = 0;
         desktop->windows[i].title_h = 0;
         desktop->windows[i].event_head = 0;
         desktop->windows[i].event_tail = 0;
@@ -239,6 +298,7 @@ int gui_create_window_for_pid(gui_desktop_t *desktop, uint32_t owner_pid,
             window->bg_color = bg_color;
             window->border_color = border_color;
             window->owner_pid = owner_pid;
+            window->z = desktop->next_z++;
             window->title_h = 0;
             window->event_head = 0;
             window->event_tail = 0;
@@ -262,6 +322,7 @@ int gui_create_window_for_pid(gui_desktop_t *desktop, uint32_t owner_pid,
             if (window_id != 0) {
                 *window_id = i;
             }
+            gui_refresh_cursor_shape(desktop);
             return 0;
         }
     }
@@ -282,6 +343,7 @@ int gui_destroy_window(gui_desktop_t *desktop, uint32_t window_id) {
     window->bg_color = 0;
     window->border_color = 0;
     window->owner_pid = GUI_NO_OWNER;
+    window->z = 0;
     window->event_head = 0;
     window->event_tail = 0;
     window->event_count = 0;
@@ -291,13 +353,16 @@ int gui_destroy_window(gui_desktop_t *desktop, uint32_t window_id) {
     }
     if (desktop->focused_window_id == window_id) {
         desktop->focused_window_id = GUI_NO_WINDOW;
+        uint32_t best_z = 0;
         for (uint32_t i = 0; i < GUI_MAX_WINDOWS; i++) {
-            if (desktop->windows[i].used != 0) {
+            if (desktop->windows[i].used != 0 &&
+                desktop->windows[i].z >= best_z) {
                 desktop->focused_window_id = i;
-                break;
+                best_z = desktop->windows[i].z;
             }
         }
     }
+    gui_refresh_cursor_shape(desktop);
     return 0;
 }
 
@@ -312,6 +377,7 @@ int gui_set_window_title(gui_desktop_t *desktop, uint32_t window_id,
         window->title[j] = '\0';
     }
     if (title == 0) {
+        gui_refresh_cursor_shape(desktop);
         return 0;
     }
     for (uint32_t j = 0; j + 1U < GUI_TITLE_LEN; j++) {
@@ -320,6 +386,7 @@ int gui_set_window_title(gui_desktop_t *desktop, uint32_t window_id,
         }
         window->title[j] = title[j];
     }
+    gui_refresh_cursor_shape(desktop);
     return 0;
 }
 
@@ -338,6 +405,7 @@ int gui_set_window_title_bar(gui_desktop_t *desktop, uint32_t window_id,
         return -1;
     }
     window->title_h = title_h;
+    gui_refresh_cursor_shape(desktop);
     return 0;
 }
 
@@ -533,6 +601,7 @@ int gui_move_window(gui_desktop_t *desktop, uint32_t window_id, uint32_t x,
     window = &desktop->windows[window_id];
     window->x = x;
     window->y = y;
+    gui_refresh_cursor_shape(desktop);
     return 0;
 }
 
@@ -543,6 +612,8 @@ int gui_focus_window(gui_desktop_t *desktop, uint32_t window_id) {
     }
 
     desktop->focused_window_id = window_id;
+    desktop->windows[window_id].z = desktop->next_z++;
+    gui_refresh_cursor_shape(desktop);
     return 0;
 }
 
@@ -622,6 +693,53 @@ static int gui_close_box_rect(const gui_window_t *window, uint32_t *out_x,
     *out_w = bw;
     *out_h = bh;
     return 1;
+}
+
+static void gui_refresh_cursor_shape(gui_desktop_t *desktop) {
+    int32_t hit;
+    gui_window_t *window;
+
+    if (desktop == 0) {
+        return;
+    }
+
+    desktop->cursor.shape = GUI_CURSOR_ARROW;
+    hit = gui_hit_test(desktop, desktop->cursor.x, desktop->cursor.y);
+    if (hit == (int32_t)GUI_NO_WINDOW || hit < 0) {
+        return;
+    }
+
+    window = &desktop->windows[hit];
+    if (window->title_h > 0U && window->title[0] != '\0' &&
+        desktop->cursor.y >= (int32_t)window->y &&
+        desktop->cursor.y < (int32_t)(window->y + window->title_h)) {
+        desktop->cursor.shape = GUI_CURSOR_HAND;
+        return;
+    }
+
+    if (window->title_h > 0U) {
+        uint32_t cb_x = 0, cb_y = 0, cb_w = 0, cb_h = 0;
+        if (gui_close_box_rect(window, &cb_x, &cb_y, &cb_w, &cb_h) &&
+            desktop->cursor.x >= (int32_t)cb_x &&
+            desktop->cursor.x < (int32_t)(cb_x + cb_w) &&
+            desktop->cursor.y >= (int32_t)cb_y &&
+            desktop->cursor.y < (int32_t)(cb_y + cb_h)) {
+            desktop->cursor.shape = GUI_CURSOR_HAND;
+        }
+    }
+}
+
+static int gui_window_owner_dead(const gui_window_t *window) {
+    const process_t *owner;
+
+    if (window == 0 || window->used == 0 ||
+        window->owner_pid == GUI_NO_OWNER) {
+        return 0;
+    }
+
+    owner = process_find(window->owner_pid);
+    return owner == 0 || owner->state == PROCESS_ZOMBIE ||
+           owner->state == PROCESS_UNUSED;
 }
 
 static void gui_draw_window(fb_t *fb, const gui_desktop_t *desktop,
@@ -763,10 +881,30 @@ static uint32_t gui_next_window_at_or_after(const gui_desktop_t *desktop,
     return best;
 }
 
+static uint32_t gui_next_window_above_z(const gui_desktop_t *desktop,
+                                        uint32_t min_z) {
+    uint32_t best = GUI_MAX_WINDOWS;
+    uint32_t best_z = UINT32_MAX;
+
+    for (uint32_t i = 0; i < GUI_MAX_WINDOWS; i++) {
+        const gui_window_t *window = &desktop->windows[i];
+        if (window->used == 0 || window->z <= min_z) {
+            continue;
+        }
+        if (window->z < best_z) {
+            best = i;
+            best_z = window->z;
+        }
+    }
+
+    return best;
+}
+
 void gui_draw(gui_desktop_t *desktop) {
     uint32_t bottom_color;
     uint32_t height;
     uint32_t row;
+    uint32_t last_z;
 
     if (desktop == 0 || desktop->fb == 0) {
         return;
@@ -803,11 +941,18 @@ void gui_draw(gui_desktop_t *desktop) {
         }
     }
 
-    for (uint32_t i = 0; i < GUI_MAX_WINDOWS; i++) {
+    last_z = 0;
+    for (;;) {
+        uint32_t i = gui_next_window_above_z(desktop, last_z);
+        if (i == GUI_MAX_WINDOWS) {
+            break;
+        }
         gui_draw_window(desktop->fb, desktop, i, &desktop->windows[i]);
+        last_z = desktop->windows[i].z;
     }
     if (desktop->cursor.visible) {
-        gui_draw_cursor(desktop->fb, desktop->cursor.x, desktop->cursor.y);
+        gui_draw_cursor(desktop->fb, desktop->cursor.x, desktop->cursor.y,
+                        desktop->cursor.shape);
     }
 }
 
@@ -889,8 +1034,13 @@ int gui_handle_input(const input_event_t *event) {
                         g_gui_desktop.cursor.y >= (int32_t)cb_y &&
                         g_gui_desktop.cursor.y <
                             (int32_t)(cb_y + cb_h)) {
-                        (void)gui_window_push_event(window,
-                                                    GUI_EVENT_CLOSE, 0, 0);
+                        if (gui_window_owner_dead(window)) {
+                            (void)gui_destroy_window(&g_gui_desktop,
+                                                     (uint32_t)hit);
+                        } else {
+                            (void)gui_window_push_event(window,
+                                                        GUI_EVENT_CLOSE, 0, 0);
+                        }
                     } else {
                         gui_drag_start(&g_gui_desktop, (uint32_t)hit,
                                        g_gui_desktop.cursor.x -

@@ -20,11 +20,11 @@ Current desktop/window functions:
   height. Owner drawing through `gui_window_draw_rect/text` is shifted
   down by `title_h` so apps keep a 0-based content coordinate space.
 - `gui_move_window`, `gui_focus_window`, and `gui_focus_window_ensure` update
-  window position and keyboard focus.
+  window position, keyboard focus, and z-order raising.
 - `gui_window_draw_rect`, `gui_window_draw_text`, and `gui_window_clear` draw
   directly into the framebuffer, clipped to the window bounds for rectangles.
-- `gui_draw` redraws the desktop background, all windows, focus borders, and
-  the cursor.
+- `gui_draw` redraws the desktop background, all windows in z-order, focus
+  borders, and the cursor.
 - `gui_init_for_framebuffer`, `gui_render`, `gui_desktop`, `gui_handle_input`,
   and the `gui_*dirty*` helpers expose the current QEMU framebuffer surface.
 
@@ -34,6 +34,15 @@ Current input/event functions:
   point.
 - `gui_get_cursor`, `gui_set_cursor`, `gui_cursor_move`, and
   `gui_cursor_button` track cursor position and button state.
+- The compositor draws a 16x16 cursor on top of the desktop. It uses the
+  arrow by default and switches to a hand over the topmost window's kernel
+  title bar/close decoration.
+- EL0 apps can call `sys_cursor_set_shape` to hint cursor shape for controls
+  they draw themselves; the panel uses it for launcher-button hover.
+- A left click on a window raises/focuses it; a left click on the desktop
+  clears keyboard focus.
+- The kernel debug console's `ps` command reads the GUI cursor state and
+  prints it as `cursor=x,y`.
 - `gui_drag_start`, `gui_drag_update`, `gui_drag_end`, and `gui_drag_active`
   implement window dragging.
 - `gui_window_push_event` and `gui_window_pop_event` manage a fixed 32-event
@@ -55,7 +64,9 @@ Event types are `GUI_EVENT_KEY_PRESS`, `GUI_EVENT_KEY_RELEASE`,
 `GUI_EVENT_MOUSE_CLICK`, `GUI_EVENT_MOUSE_MOVE`, `GUI_EVENT_RESIZE`, and
 `GUI_EVENT_CLOSE`. The kernel now produces `GUI_EVENT_CLOSE` when a left
 click lands inside the close box of a window with a title bar
-(`title_h >= 10`). Resize is still defined but not produced yet.
+(`title_h >= 10`) while the owner process is still alive. If the owner has
+already exited or been reclaimed, the close click destroys the window directly.
+Resize is still defined but not produced yet.
 
 ## Framebuffer And Input
 
@@ -72,8 +83,8 @@ Input is queued but still early:
   `input_event_t`.
 - UART key input is also mapped into `INPUT_EVENT_KEY_PRESS`.
 - During syscall dispatch, pending input is drained to the GUI for all calls
-  except `SYS_READ`, so serial shell reads can consume stdin while focused GUI
-  windows still receive key events during normal app event loops.
+  except `SYS_READ`, so legacy/debug serial readers can consume stdin while
+  focused GUI windows still receive key events during normal app event loops.
 
 ## Userland And Apps
 
@@ -83,10 +94,15 @@ and `clock`. The build embeds flat app blobs into the kernel and exposes them
 through bootfs/VFS under `/kolibri/<name>`. The first boot app is `panel`,
 which owns the taskbar window and launches other apps.
 
-`clock` and `editor` are windowed apps. The editor is deliberately minimal: it
-loads `/tmp/note`, draws the visible prefix in its window, appends printable
-input, handles backspace/newline, saves with ctrl-s, and closes with ctrl-q or
-the title-bar close button. `shell` and `monitor` still use serial I/O.
+`shell`, `clock`, `editor`, and `monitor` are windowed apps. The shell has a
+small fixed display, consumes key events from its window, and supports `help`,
+`ls`, `mem`, `ps`, `ticks`, `run <name>`, `kill last`, and `exit`; argv and a
+real terminal buffer are still future work. The editor is deliberately
+minimal: it loads `/tmp/note`, draws the visible prefix in its window, appends
+printable input, handles backspace/newline, saves with ctrl-s, and closes with
+ctrl-q or the title-bar close button. The monitor renders a compact
+`sys_meminfo`/`sys_timeinfo`/`sys_proclist` view and closes with `q` or the
+title-bar close button.
 
 There is no `programs/libkarm`, `programs/libkarmdesk`, or `programs/libkarmgui`
 yet. Current apps call syscalls directly from AArch64 assembly.
@@ -102,11 +118,17 @@ The current window syscall range starts at 70:
 - `74 sys_window_event`
 - `75 sys_window_set_title`
 - `76 sys_window_redraw`
+- `77 sys_window_focus`
+- `78 sys_window_for_pid`
+- `79 sys_cursor_set_shape`
 
 These syscalls validate ownership by comparing the window owner pid with the
-calling process pid. `sys_window_event` returns packed triples of
-`type,data1,data2` and currently yields for a bounded number of scheduler turns
-before returning `ERR_AGAIN`.
+calling process pid for owner-only operations. `sys_window_focus` and
+`sys_window_for_pid` are intentionally callable across pids so the panel can
+raise and list windows owned by app processes. `sys_window_event` returns
+packed triples of `type,data1,data2` and currently yields for a bounded number
+of scheduler turns before returning `ERR_AGAIN`. `sys_cursor_set_shape` accepts
+`0` for arrow and `1` for hand.
 
 ## Missing Or Experimental
 
@@ -119,6 +141,8 @@ before returning `ERR_AGAIN`.
   but resize events are only defined in the ABI and are not produced yet.
 - There are no titlebar buttons beyond close; minimize/maximize and
   taskbar-owned focus controls are not implemented yet.
+- Cursor hints are still global and minimal; there is no per-window cursor
+  region registry yet.
 - Text drawing is not clipped per glyph.
 - Mouse event coordinates are absolute framebuffer coordinates, not a final
   normalized event ABI.
