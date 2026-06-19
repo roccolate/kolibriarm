@@ -18,6 +18,8 @@ extern char __app_win_start[];
 extern char __app_win_end[];
 extern char __app_panel_start[];
 extern char __app_panel_end[];
+extern char __app_clock_start[];
+extern char __app_clock_end[];
 
 typedef struct {
     const char *name;
@@ -65,6 +67,11 @@ static const boot_program_source_t g_boot_programs[] = {
         .name = "panel",
         .image_start = (const uint8_t *)(const void *)__app_panel_start,
         .image_end = (const uint8_t *)(const void *)__app_panel_end,
+    },
+    {
+        .name = "clock",
+        .image_start = (const uint8_t *)(const void *)__app_clock_start,
+        .image_end = (const uint8_t *)(const void *)__app_clock_end,
     },
 };
 

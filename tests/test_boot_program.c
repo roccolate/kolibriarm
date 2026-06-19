@@ -19,6 +19,8 @@ extern char __app_win_start[];
 extern char __app_win_end[];
 extern char __app_panel_start[];
 extern char __app_panel_end[];
+extern char __app_clock_start[];
+extern char __app_clock_end[];
 
 __asm__(
     ".section .app_hello_blob, \"a\"\n"
@@ -131,6 +133,20 @@ __asm__(
     ".skip 56\n"
     ".global __app_panel_end\n"
     "__app_panel_end:\n"
+
+    ".section .app_clock_blob, \"a\"\n"
+    ".balign 8\n"
+    ".global __app_clock_start\n"
+    "__app_clock_start:\n"
+    ".long 0x31494c4b\n"
+    ".short 80\n"
+    ".short 1\n"
+    ".quad 84\n"
+    ".quad 80\n"
+    ".byte 0x63, 0x6c, 0x6b, 0x21\n"
+    ".skip 56\n"
+    ".global __app_clock_end\n"
+    "__app_clock_end:\n"
 );
 
 void test_boot_program_find_existing_program(void) {

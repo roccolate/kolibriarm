@@ -142,24 +142,9 @@ shell_start:
     cbnz x0, 50f
 
     mov x0, x19
-    adr x1, shell_run_hello_cmd
+    adr x1, shell_run_token
     bl common_streq
-    cbnz x0, 60f
-
-    mov x0, x19
-    adr x1, shell_run_loop_cmd
-    bl common_streq
-    cbnz x0, 61f
-
-    mov x0, x19
-    adr x1, shell_run_monitor_cmd
-    bl common_streq
-    cbnz x0, 62f
-
-    mov x0, x19
-    adr x1, shell_run_editor_cmd
-    bl common_streq
-    cbnz x0, 63f
+    cbnz x0, 64f
 
     mov x0, x19
     adr x1, shell_kill_last_cmd
@@ -348,38 +333,65 @@ shell_start:
     b 2b
 
 // run <name>
-60:
-    adr x0, shell_app_hello
+64:
+    // x19 = line buffer, x20 = line length. The line is null-terminated
+    // at x19[x20]. Accept any first token after "run " so that every
+    // registered app (hello, loop, fault, shell, editor, monitor, win,
+    // panel, clock) is launchable without a per-name handler.
+    cmp x20, #4
+    b.lt 65f                     // "run" alone: missing name
+    ldrb w0, [x19, #3]
+    cmp w0, #' '
+    b.ne 65f                     // "runX..." (no space): malformed
+    add x21, x19, #4             // x21 = name start
+    sub x22, x20, #4             // x22 = name length (cap at 20)
+    cmp x22, #20
+    b.le 1f
+    mov x22, #20
+1:
+    // Build "/kolibri/<name>" in a 32-byte temp buffer at sp+64. The
+    // line buffer (sp..sp+63) sits below it; the sys_read scratch at
+    // sp+80 is unused once we are past the read loop.
+    add x23, x19, #64
+    adr x24, shell_kolibri_prefix
+    mov x25, #0
+2:
+    ldrb w0, [x24, x25]
+    cbz w0, 3f
+    strb w0, [x23, x25]
+    add x25, x25, #1
+    cmp x25, #32
+    b.lt 2b
+    b 65f                        // "/kolibri/" alone already overflows
+3:
+    mov x26, #0                  // x26 reused as inner counter
+4:
+    cmp x26, x22
+    b.ge 5f
+    ldrb w0, [x21, x26]
+    cmp w0, #' '
+    b.eq 5f                      // stop at first space; trailing tokens
+    strb w0, [x23, x25]          //   are ignored for now (no argv yet)
+    add x25, x25, #1
+    add x26, x26, #1
+    cmp x25, #32
+    b.lt 4b
+    b 65f
+5:
+    mov w0, #0
+    strb w0, [x23, x25]
+
+    mov x0, x23
     mov x8, #4                   // sys_spawn
     svc #0
     tbnz x0, #63, 65f
-    mov x26, x0
+    mov x26, x0                  // remember pid for "kill last"
     mov x0, #1
     adr x1, shell_spawned
     mov x2, shell_spawned_len
     bl common_write
     b 2b
-61:
-    adr x0, shell_app_loop
-    mov x8, #4
-    svc #0
-    tbnz x0, #63, 65f
-    mov x26, x0
-    b 2b
-62:
-    adr x0, shell_app_monitor
-    mov x8, #4
-    svc #0
-    tbnz x0, #63, 65f
-    mov x26, x0
-    b 2b
-63:
-    adr x0, shell_app_editor
-    mov x8, #4
-    svc #0
-    tbnz x0, #63, 65f
-    mov x26, x0
-    b 2b
+
 65:
     mov x0, #1
     adr x1, shell_run_error
@@ -455,14 +467,10 @@ shell_ps_cmd:
     .asciz "ps"
 shell_ticks_cmd:
     .asciz "ticks"
-shell_run_hello_cmd:
-    .asciz "run hello"
-shell_run_loop_cmd:
-    .asciz "run loop"
-shell_run_monitor_cmd:
-    .asciz "run monitor"
-shell_run_editor_cmd:
-    .asciz "run editor"
+shell_run_token:
+    .asciz "run"
+shell_kolibri_prefix:
+    .asciz "/kolibri/"
 shell_kill_last_cmd:
     .asciz "kill last"
 shell_pwd_cmd:
@@ -472,11 +480,11 @@ shell_cd_root_cmd:
 shell_exit_cmd:
     .asciz "exit"
 shell_help_msg:
-    .ascii "help, ls, ls /fat, ps, ticks, pwd, cd /, mem, run hello, run loop, run editor, run monitor, kill last, exit\n"
-shell_help_msg_len = . - shell_help_msg
-shell_space:
+    .ascii "help, ls, ls /fat, ps, ticks, pwd, cd /, mem, run <name>, kill last, exit\n"
+    shell_help_msg_len = . - shell_help_msg
+    shell_space:
     .ascii " "
-shell_unknown:
+    shell_unknown:
     .ascii "unknown command\n"
 shell_unknown_len = . - shell_unknown
 shell_ls_error:
@@ -525,12 +533,4 @@ shell_root_path:
     .asciz "/"
 shell_fat_path:
     .asciz "/fat"
-shell_app_hello:
-    .asciz "/kolibri/hello"
-shell_app_loop:
-    .asciz "/kolibri/loop"
-shell_app_monitor:
-    .asciz "/kolibri/monitor"
-shell_app_editor:
-    .asciz "/kolibri/editor"
 shell_image_end:

@@ -63,6 +63,12 @@ SECTIONS {
         __app_panel_end = .;
     } :text
 
+    .app_clock : ALIGN(16) {
+        __app_clock_start = .;
+        KEEP(*(.app_clock_blob*))
+        __app_clock_end = .;
+    } :text
+
     .rodata : ALIGN(8) {
         *(.rodata*)
     } :rodata

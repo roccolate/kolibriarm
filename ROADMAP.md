@@ -189,6 +189,19 @@ Exit criteria:
 The roadmap does not commit to anything beyond Phase 10.5 yet. The next set of
 candidates, in rough order of return on effort:
 
+- **Per-window backing buffers or damage tracking (deferred).** Today's
+  compositor repaints the full desktop on every dirty tick, which is
+  visually fine for move/drag and for apps that repaint their whole
+  content area (clock, monitor, editor when rewritten, shell). It
+  becomes fragile only when an app relies on partial updates that
+  overlap with another window's redraw between ticks. Implement the
+  first concrete case of that breakage before designing the
+  abstraction: choose between per-window `uint32_t *backing[w*h]`
+  (expensive; one full-window allocation per window from kheap) or
+  damage-rectangle tracking (cheap; partial draws can still be
+  clobbered by interleaved compositor passes). Until a real partial
+  update bug appears, the alpha rule is: apps repaint their entire
+  content area on every change.
 - Real FAT32 write (cluster allocation, file create/delete, rename, LFN).
 - USB HID keyboard and mouse drivers, so the QEMU UART input is no longer the
   primary path.

@@ -11,6 +11,12 @@
 #define GUI_CURSOR_W         12
 #define GUI_CURSOR_H         12
 #define GUI_TITLE_LEN        32U
+/* Kernel-drawn close button inside the title bar. The box is only
+ * rendered (and only intercepts clicks) when the window has a
+ * title_h large enough to fit it without crowding the title text. */
+#define GUI_CLOSE_BTN_W      10U
+#define GUI_CLOSE_BTN_PAD     2U
+#define GUI_CLOSE_BTN_MIN_TITLE_H 10U
 /* Default kernel-drawn title bar height when an app requests one. Fits
  * the 5x7 bitmap font (7 px glyph) plus 5 px of vertical padding. */
 #define GUI_TITLE_BAR_H      12U

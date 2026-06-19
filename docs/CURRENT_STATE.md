@@ -11,7 +11,8 @@ kernel-owned compositor, not a desktop server.
 Current desktop/window functions:
 
 - `gui_init` initializes a fixed `gui_desktop_t` over an `fb_t`.
-- `gui_create_window` creates an ownerless debug/demo window.
+- `gui_create_window` creates an ownerless kernel-drawn window for tests and
+  compatibility paths.
 - `gui_create_window_for_pid` creates a window owned by a process pid.
 - `gui_destroy_window` clears a window slot.
 - `gui_set_window_title` stores a fixed-size title.
@@ -52,8 +53,9 @@ typedef struct {
 
 Event types are `GUI_EVENT_KEY_PRESS`, `GUI_EVENT_KEY_RELEASE`,
 `GUI_EVENT_MOUSE_CLICK`, `GUI_EVENT_MOUSE_MOVE`, `GUI_EVENT_RESIZE`, and
-`GUI_EVENT_CLOSE`. Resize and close are defined but not fully produced by the
-window manager yet.
+`GUI_EVENT_CLOSE`. The kernel now produces `GUI_EVENT_CLOSE` when a left
+click lands inside the close box of a window with a title bar
+(`title_h >= 10`). Resize is still defined but not produced yet.
 
 ## Framebuffer And Input
 
@@ -105,6 +107,8 @@ before returning `ERR_AGAIN`.
   framebuffer path.
 - Redraw and expose handling are still demo-level.
 - Close and resize events are defined but not routed from decorations.
+  (Close is now produced by the title-bar close button; resize is still
+  unproduced.)
 - There are no titlebar buttons, minimize/maximize, or taskbar-owned focus
   controls yet.
 - Text drawing is not clipped per glyph.

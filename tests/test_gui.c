@@ -1,10 +1,26 @@
 #include <stdint.h>
-#include <string.h>
 
 #include "unity/unity.h"
 #include "../kernel/gui.h"
 
 static uint32_t g_test_gui_pixels[640U * 480U];
+
+void test_gui_init_for_framebuffer_starts_with_empty_desktop(void) {
+    fb_t fb;
+    gui_desktop_t *desktop;
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)fb_init(&fb, g_test_gui_pixels,
+                                               640, 480, 640));
+    gui_init_for_framebuffer(&fb, 0);
+    desktop = gui_desktop();
+    TEST_ASSERT_NOT_NULL(desktop);
+    TEST_ASSERT_EQUAL_UINT64(GUI_NO_WINDOW, desktop->focused_window_id);
+
+    for (uint32_t i = 0; i < GUI_MAX_WINDOWS; i++) {
+        TEST_ASSERT_EQUAL_UINT64(0, desktop->windows[i].used);
+    }
+}
 
 void test_gui_create_draws_windows_in_creation_order(void) {
     uint32_t pixels[64] = { 0 };
@@ -317,7 +333,8 @@ void test_gui_drag_moves_window_following_cursor(void) {
     fb_t fb;
     gui_desktop_t desktop;
     uint32_t id;
-    uint32_t pixels_backup[100];
+    uint32_t final_x;
+    uint32_t final_y;
 
     TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)fb_init(&fb, pixels, 10, 10, 10));
     TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)gui_init(&desktop, &fb, 0xff202020U));
@@ -352,9 +369,11 @@ void test_gui_drag_moves_window_following_cursor(void) {
     /* End drag: state clears, further updates are no-ops. */
     gui_drag_end(&desktop);
     TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)gui_drag_active(&desktop));
-    memcpy(pixels_backup, pixels, sizeof(pixels));
+    final_x = desktop.windows[id].x;
+    final_y = desktop.windows[id].y;
     gui_drag_update(&desktop, 0, 0);
-    TEST_ASSERT_EQUAL_UINT64(0, memcmp(pixels_backup, pixels, sizeof(pixels)));
+    TEST_ASSERT_EQUAL_UINT64(final_x, desktop.windows[id].x);
+    TEST_ASSERT_EQUAL_UINT64(final_y, desktop.windows[id].y);
 }
 
 void test_gui_drag_rejects_unknown_window(void) {
@@ -373,6 +392,7 @@ void test_gui_drag_rejects_unknown_window(void) {
 void test_gui_drag_stays_active_until_left_release(void) {
     fb_t fb;
     gui_desktop_t *desktop;
+    uint32_t window_id;
     input_event_t press = {
         .type = INPUT_EVENT_MOUSE_BUTTON,
         .timestamp = 0,
@@ -396,14 +416,19 @@ void test_gui_drag_stays_active_until_left_release(void) {
     desktop = gui_desktop();
     TEST_ASSERT_NOT_NULL(desktop);
 
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_create_window(
+                                 desktop, 220, 150, 340, 230, 0xff38a169U,
+                                 0xfffff4c2U, &window_id));
+
     gui_set_cursor(desktop, 250, 160);
     TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)gui_handle_input(&press));
     TEST_ASSERT_EQUAL_UINT64(1, (uint64_t)gui_drag_active(desktop));
 
     TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)gui_handle_input(&move));
     TEST_ASSERT_EQUAL_UINT64(1, (uint64_t)gui_drag_active(desktop));
-    TEST_ASSERT_EQUAL_UINT64(240, desktop->windows[1].x);
-    TEST_ASSERT_EQUAL_UINT64(160, desktop->windows[1].y);
+    TEST_ASSERT_EQUAL_UINT64(240, desktop->windows[window_id].x);
+    TEST_ASSERT_EQUAL_UINT64(160, desktop->windows[window_id].y);
 
     TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)gui_handle_input(&release));
     TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)gui_drag_active(desktop));
@@ -564,6 +589,90 @@ void test_gui_set_title_bar_zero_disables_bar(void) {
     TEST_ASSERT_EQUAL_UINT64(0xff0000aaU, pixels[1 * 8 + 1]);
 }
 
+void test_gui_close_button_pushed_event_on_title_bar_click(void) {
+    fb_t fb;
+    gui_desktop_t *desktop;
+    uint32_t window_id;
+    input_event_t press;
+    gui_event_t event;
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)fb_init(&fb, g_test_gui_pixels,
+                                               640, 480, 640));
+    gui_init_for_framebuffer(&fb, 0);
+    desktop = gui_desktop();
+    TEST_ASSERT_NOT_NULL(desktop);
+
+    /* Add a titled window that owns the close button. Startup no longer
+     * creates any windows. */
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_create_window_for_pid(
+                                 desktop, 7U, 0, 0, 80, 80, 0xff0000aaU,
+                                 0xff808080U, "demo", &window_id));
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_set_window_title_bar(
+                                 desktop, window_id, 12U));
+
+    /* Cursor inside the close box: cb_x = 80 - 10 - 2 = 68, cb_y = 2,
+     * cb_w = 10, cb_h = 8. Pick (72, 6). */
+    gui_set_cursor(desktop, 72, 6);
+    press = (input_event_t){
+        .type = INPUT_EVENT_MOUSE_BUTTON,
+        .timestamp = 0,
+        .data.mouse_button = { .button = 0U, .pressed = 1U },
+    };
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)gui_handle_input(&press));
+
+    /* Expect exactly one GUI_EVENT_CLOSE on the window queue. */
+    TEST_ASSERT_EQUAL_UINT64(1U, desktop->windows[window_id].event_count);
+    TEST_ASSERT_EQUAL_UINT64(
+        0, (uint64_t)gui_window_pop_event(
+               &desktop->windows[window_id], &event));
+    TEST_ASSERT_EQUAL_UINT64(GUI_EVENT_CLOSE, event.type);
+}
+
+void test_gui_close_button_click_outside_box_starts_drag(void) {
+    fb_t fb;
+    gui_desktop_t *desktop;
+    uint32_t window_id;
+    input_event_t press;
+    gui_event_t event;
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)fb_init(&fb, g_test_gui_pixels,
+                                               640, 480, 640));
+    gui_init_for_framebuffer(&fb, 0);
+    desktop = gui_desktop();
+    TEST_ASSERT_NOT_NULL(desktop);
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_create_window_for_pid(
+                                 desktop, 7U, 0, 0, 80, 80, 0xff0000aaU,
+                                 0xff808080U, "demo", &window_id));
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_set_window_title_bar(
+                                 desktop, window_id, 12U));
+
+    /* Click on the title bar but to the left of the close box: should
+     * produce GUI_EVENT_MOUSE_CLICK and start a drag, NOT a close. */
+    gui_set_cursor(desktop, 10, 4);
+    press = (input_event_t){
+        .type = INPUT_EVENT_MOUSE_BUTTON,
+        .timestamp = 0,
+        .data.mouse_button = { .button = 0U, .pressed = 1U },
+    };
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)gui_handle_input(&press));
+
+    TEST_ASSERT_EQUAL_UINT64(1, (uint64_t)gui_drag_active(desktop));
+    TEST_ASSERT_EQUAL_UINT64(1U, desktop->windows[window_id].event_count);
+    TEST_ASSERT_EQUAL_UINT64(
+        0, (uint64_t)gui_window_pop_event(
+               &desktop->windows[window_id], &event));
+    TEST_ASSERT_EQUAL_UINT64(GUI_EVENT_MOUSE_CLICK, event.type);
+    /* And the event is not a close. */
+    TEST_ASSERT_TRUE(event.type != GUI_EVENT_CLOSE);
+}
+
 void test_gui_focus_window_switches_to_target(void) {
     uint32_t pixels[80] = { 0 };
     fb_t fb;
@@ -612,7 +721,7 @@ void test_gui_window_for_pid_returns_owner_windows(void) {
     TEST_ASSERT_EQUAL_UINT64(0,
                              (uint64_t)gui_init(&desktop, &fb, 0xff101010U));
     desktop.cursor.visible = 0;
-    /* pid 42 owns first and second; pid 99 owns third; the demo window
+    /* pid 42 owns first and second; pid 99 owns third; the ownerless window
      * (orphan) has no owner. */
     TEST_ASSERT_EQUAL_UINT64(0,
                              (uint64_t)gui_create_window_for_pid(
@@ -649,7 +758,7 @@ void test_gui_window_for_pid_returns_owner_windows(void) {
     TEST_ASSERT_EQUAL_UINT64(GUI_NO_WINDOW,
                              (uint64_t)gui_window_for_pid(
                                  &desktop, 99U, 1U));
-    /* The owner-less demo window does not appear under any pid. */
+    /* The ownerless window does not appear under any pid. */
     TEST_ASSERT_EQUAL_UINT64(GUI_NO_WINDOW,
                              (uint64_t)gui_window_for_pid(
                                  &desktop, GUI_NO_OWNER, 0U));

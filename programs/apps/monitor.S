@@ -27,7 +27,6 @@ monitor_image_header:
 monitor_start:
     sub sp, sp, #160
     mov x19, sp
-    mov x26, #5                   // ticks-between-redraws budget
 
 90:
     mov x0, #1
@@ -127,9 +126,7 @@ monitor_start:
 93:
     mov x8, #2
     svc #0
-    subs x26, x26, #1
-    b.ne 90b
-    b 96f
+    b 90b                        // loop until the user presses 'q'
 
 95:
     mov x0, #1

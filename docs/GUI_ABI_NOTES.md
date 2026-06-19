@@ -49,7 +49,7 @@ Current event types:
 | 5 | `GUI_EVENT_RESIZE` | width | height |
 | 6 | `GUI_EVENT_CLOSE` | 0 | 0 |
 
-Resize and close are ABI placeholders today. The compositor does not yet
+Resize is still an ABI placeholder. The compositor does not yet
 produce them from decorations.
 
 ## Current Limitations

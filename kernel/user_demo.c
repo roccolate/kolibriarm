@@ -21,7 +21,7 @@
 #define USER_DEMO_STACK_VA_BASE 0x0000000000800000ULL
 #define USER_DEMO_STACK_VA_STRIDE 0x0000000000010000ULL
 
-#define USER_DEMO_BOOT_APP "shell"
+#define USER_DEMO_BOOT_APP "panel"
 
 extern uint64_t user_enter_el0(uint64_t entry, uint64_t stack_top, uint64_t pstate);
 extern char user_enter_el0_return[];
@@ -231,9 +231,6 @@ uint64_t user_demo_run(uint64_t memory_base, uint64_t memory_size,
     g_spawn_memory_base = memory_base;
     g_spawn_memory_size = memory_size;
     g_spawn_map_mmio = map_mmio;
-
-    /* Auto-spawn the panel taskbar as a sibling process. */
-    (void)user_demo_spawn_vfs("/kolibri/panel", 0);
 
     shell->state = PROCESS_RUNNING;
     process_set_current(shell);

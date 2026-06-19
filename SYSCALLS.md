@@ -160,7 +160,7 @@ Current limitations:
 - `sys_window_focus` only updates the focus border; it does not change the
   existing z-order (windows are drawn in creation order). Raising a
   partially obscured window requires a future z-order rearrangement API.
-- `sys_window_for_pid` skips owner-less demo windows (those whose
+- `sys_window_for_pid` skips ownerless windows (those whose
   `owner_pid == GUI_NO_OWNER`); only windows actually owned by a process
   are visible through it.
 - Drawing still writes through the current kernel framebuffer path; there is no

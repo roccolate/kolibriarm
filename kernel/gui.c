@@ -570,7 +570,7 @@ uint32_t gui_window_for_pid(gui_desktop_t *desktop, uint32_t owner_pid,
         return GUI_NO_WINDOW;
     }
     /* GUI_NO_OWNER is the sentinel for "no pid"; never enumerate
-     * owner-less demo windows under it. */
+     * ownerless kernel-created windows under it. */
     if (owner_pid == GUI_NO_OWNER) {
         return GUI_NO_WINDOW;
     }
@@ -593,6 +593,37 @@ uint32_t gui_window_for_pid(gui_desktop_t *desktop, uint32_t owner_pid,
 static uint32_t gui_blend_color(uint32_t top, uint32_t bottom,
                                 uint32_t num, uint32_t denom);
 
+/* Compute the close-button rect for a window with a kernel-drawn title
+ * bar. Returns 1 and fills the out-params when the bar is tall enough
+ * and wide enough; returns 0 otherwise. The button sits flush right
+ * inside the bar with GUI_CLOSE_BTN_PAD pixels of padding on every
+ * side. When the title_h is smaller than the requested box height, the
+ * helper clamps the box to fit. The minimum title_h gate
+ * (GUI_CLOSE_BTN_MIN_TITLE_H) keeps the box from colliding with the
+ * title text in thin title bars. */
+static int gui_close_box_rect(const gui_window_t *window, uint32_t *out_x,
+                              uint32_t *out_y, uint32_t *out_w,
+                              uint32_t *out_h) {
+    if (window == 0 || window->used == 0 || window->title_h == 0U ||
+        window->title[0] == '\0' ||
+        window->title_h < GUI_CLOSE_BTN_MIN_TITLE_H) {
+        return 0;
+    }
+    uint32_t bh = window->title_h - 2U * GUI_CLOSE_BTN_PAD;
+    if (bh < 4U) {
+        return 0;
+    }
+    uint32_t bw = (bh < GUI_CLOSE_BTN_W) ? bh : GUI_CLOSE_BTN_W;
+    if (window->w < bw + 2U * GUI_CLOSE_BTN_PAD) {
+        return 0;
+    }
+    *out_x = window->x + window->w - bw - GUI_CLOSE_BTN_PAD;
+    *out_y = window->y + GUI_CLOSE_BTN_PAD;
+    *out_w = bw;
+    *out_h = bh;
+    return 1;
+}
+
 static void gui_draw_window(fb_t *fb, const gui_desktop_t *desktop,
                             uint32_t index, const gui_window_t *window) {
     uint32_t border;
@@ -610,8 +641,8 @@ static void gui_draw_window(fb_t *fb, const gui_desktop_t *desktop,
 
     if (window->owner_drawn == 0) {
         /* Default path: fill the window with border then paint bg_color
-         * over the interior. Used by windows that haven't received any
-         * drawing from their EL0 owner (the boot-time demo windows). */
+         * over the interior. Used by windows that have not received any
+         * drawing from their EL0 owner. */
         fb_fillrect(fb, window->x, window->y, window->w, window->h, border);
         if (window->w > 2U && window->h > 2U) {
             fb_fillrect(fb, window->x + 1U, window->y + 1U,
@@ -655,6 +686,27 @@ static void gui_draw_window(fb_t *fb, const gui_desktop_t *desktop,
                                        : 0U);
         font_draw_text(fb, window->x + 2U, text_y, window->title,
                        0xfff0f4f8U);
+        /* Close button: small red box with an X inside, flush right.
+         * Only drawn when gui_close_box_rect accepts the geometry. The
+         * click path in gui_handle_input mirrors this helper, so a
+         * visible close box always intercepts a left-click. */
+        uint32_t cb_x = 0, cb_y = 0, cb_w = 0, cb_h = 0;
+        if (gui_close_box_rect(window, &cb_x, &cb_y, &cb_w, &cb_h)) {
+            uint32_t cb_bg = (desktop != 0 &&
+                              desktop->focused_window_id == index)
+                                 ? 0xffe04a4aU
+                                 : 0xff8a3030U;
+            fb_fillrect(fb, cb_x, cb_y, cb_w, cb_h, cb_bg);
+            uint32_t x_color = 0xfff8f8f8U;
+            fb_draw_line(fb, (int32_t)(cb_x + 2U),
+                         (int32_t)(cb_y + 2U),
+                         (int32_t)(cb_x + cb_w - 3U),
+                         (int32_t)(cb_y + cb_h - 3U), x_color);
+            fb_draw_line(fb, (int32_t)(cb_x + cb_w - 3U),
+                         (int32_t)(cb_y + 2U),
+                         (int32_t)(cb_x + 2U),
+                         (int32_t)(cb_y + cb_h - 3U), x_color);
+        }
     }
 }
 
@@ -722,7 +774,7 @@ void gui_draw(gui_desktop_t *desktop) {
 
     /* Vertical gradient: top is background_color, bottom is a darker
      * shade for visual depth. Skip the spans covered by windows so the
-     * window's own painting (kernel-drawn bg_color for the demo windows,
+     * window's own painting (kernel-drawn bg_color for ownerless windows,
      * EL0-drawn content for owner-drawn windows like the panel taskbar)
      * survives every redraw. */
     height = desktop->fb->height;
@@ -817,21 +869,39 @@ int gui_handle_input(const input_event_t *event) {
         if (event->data.mouse_button.button == 0U) {
             if (event->data.mouse_button.pressed != 0U) {
                 /* Left press: focus is already set by gui_cursor_button.
-                 * Start a drag and deliver a click on the topmost window. */
+                 * If the click lands inside the kernel-drawn close box
+                 * of the focused window, push GUI_EVENT_CLOSE and skip
+                 * both the drag start and the generic click delivery.
+                 * Otherwise start a drag and deliver a click on the
+                 * topmost window. */
                 int32_t hit = gui_hit_test(&g_gui_desktop,
                                            g_gui_desktop.cursor.x,
                                            g_gui_desktop.cursor.y);
                 if (hit != (int32_t)GUI_NO_WINDOW && hit >= 0) {
                     gui_window_t *window =
                         &g_gui_desktop.windows[hit];
-                    gui_drag_start(&g_gui_desktop, (uint32_t)hit,
-                                   g_gui_desktop.cursor.x -
-                                       (int32_t)window->x,
-                                   g_gui_desktop.cursor.y -
-                                       (int32_t)window->y);
-                    gui_window_push_event(window, GUI_EVENT_MOUSE_CLICK,
-                                          g_gui_desktop.cursor.x,
-                                          g_gui_desktop.cursor.y);
+                    uint32_t cb_x = 0, cb_y = 0, cb_w = 0, cb_h = 0;
+                    if (gui_close_box_rect(window, &cb_x, &cb_y, &cb_w,
+                                           &cb_h) &&
+                        g_gui_desktop.cursor.x >= (int32_t)cb_x &&
+                        g_gui_desktop.cursor.x <
+                            (int32_t)(cb_x + cb_w) &&
+                        g_gui_desktop.cursor.y >= (int32_t)cb_y &&
+                        g_gui_desktop.cursor.y <
+                            (int32_t)(cb_y + cb_h)) {
+                        (void)gui_window_push_event(window,
+                                                    GUI_EVENT_CLOSE, 0, 0);
+                    } else {
+                        gui_drag_start(&g_gui_desktop, (uint32_t)hit,
+                                       g_gui_desktop.cursor.x -
+                                           (int32_t)window->x,
+                                       g_gui_desktop.cursor.y -
+                                           (int32_t)window->y);
+                        gui_window_push_event(window,
+                                              GUI_EVENT_MOUSE_CLICK,
+                                              g_gui_desktop.cursor.x,
+                                              g_gui_desktop.cursor.y);
+                    }
                 }
             }
             if (event->data.mouse_button.pressed == 0U) {
@@ -867,8 +937,6 @@ int gui_handle_input(const input_event_t *event) {
 
 void gui_init_for_framebuffer(fb_t *fb, void *context) {
     (void)context;
-    uint32_t first = GUI_NO_WINDOW;
-    uint32_t second = GUI_NO_WINDOW;
 
     g_gui_active = 0;
     g_gui_dirty = 0;
@@ -882,14 +950,13 @@ void gui_init_for_framebuffer(fb_t *fb, void *context) {
         return;
     }
 
-    /* Two desktop windows so the panel taskbar can be reached with the
-     * mouse and so the host tests have a window to drag. The registered
-     * apps (panel.S) create their own windows on top of these via
-     * syscalls. */
-    (void)gui_create_window(&g_gui_desktop, 72, 64, 320, 220, 0xff2f6fedU,
-                            0xffd8e4ffU, &first);
-    (void)gui_create_window(&g_gui_desktop, 220, 150, 340, 230, 0xff38a169U,
-                            0xfffff4c2U, &second);
+    /* The desktop starts empty: the panel taskbar (programs/apps/panel.S)
+     * is the first userland process and creates its own window via
+     * sys_window_create. Per-app launchers, running-app entries, and
+     * any user-spawned windows build on top of that empty gradient.
+     * The two demo rectangles that used to live here made the screen
+     * look like a demo instead of a real desktop; the alpha rule is to
+     * leave the surface empty until the panel paints. */
     gui_draw(&g_gui_desktop);
     g_gui_active = 1;
 }

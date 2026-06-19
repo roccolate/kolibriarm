@@ -458,6 +458,8 @@ static int64_t sys_window_create(process_t *process, uint64_t x, uint64_t y,
                                   &window_id) != 0) {
         return ERR_AGAIN;
     }
+    /* New window must show on the next compositor pass. */
+    gui_request_redraw();
     return (int64_t)window_id;
 }
 
@@ -475,6 +477,8 @@ static int64_t sys_window_destroy(process_t *process, uint64_t window_id) {
     if (gui_destroy_window(gui_desktop(), (uint32_t)window_id) != 0) {
         return ERR_BADF;
     }
+    /* Old window rectangle must be repainted by the compositor. */
+    gui_request_redraw();
     return 0;
 }
 
@@ -537,6 +541,8 @@ static int64_t sys_window_set_title(process_t *process, uint64_t window_id,
                              title) != 0) {
         return ERR_BADF;
     }
+    /* Title text change must show on the next compositor pass. */
+    gui_request_redraw();
     /* title_h is an optional fourth argument. Older apps leave x2 unset,
      * so we keep the default of 0 (no kernel title bar) for ABI
      * compatibility. The kernel validates title_h against the window
@@ -558,7 +564,6 @@ static int64_t sys_window_redraw(process_t *process, uint64_t window_id) {
         return ERR_BADF;
     }
     /* Mark the desktop dirty so the kernel redraws on next tick. */
-    gui_clear_dirty();
     gui_request_redraw();
     return 0;
 }
