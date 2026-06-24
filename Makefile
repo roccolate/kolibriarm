@@ -57,7 +57,6 @@ OBJS := \
     $(BUILD_DIR)/kernel/fat32.o \
     $(BUILD_DIR)/kernel/font.o \
     $(BUILD_DIR)/kernel/gui.o \
-    $(BUILD_DIR)/kernel/gui_drag_policy.o \
     $(BUILD_DIR)/kernel/ipc.o \
     $(BUILD_DIR)/kernel/exception_vectors.o \
     $(BUILD_DIR)/kernel/exceptions.o \
@@ -116,10 +115,6 @@ $(BUILD_DIR):
 $(BUILD_DIR)/%.o: %.S | $(BUILD_DIR)
 	mkdir -p $(dir $@)
 	$(CC) $(DEPFLAGS) $(ASFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/kernel/gui.o: kernel/gui.c kernel/gui_drag_policy.h | $(BUILD_DIR)
-	mkdir -p $(dir $@)
-	$(CC) $(DEPFLAGS) $(CFLAGS) -include kernel/gui_drag_policy.h -c $< -o $@
 
 $(BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
 	mkdir -p $(dir $@)
