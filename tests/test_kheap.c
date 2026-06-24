@@ -17,7 +17,7 @@ static void reset_test_heap(void) {
     kheap_init();
 }
 
-void test_kheap_basic_alloc_free(void) {
+static void assert_kheap_basic_alloc_free(void) {
     reset_test_heap();
 
     uint64_t total = kheap_total_bytes();
@@ -33,7 +33,7 @@ void test_kheap_basic_alloc_free(void) {
     TEST_ASSERT_TRUE(free_after >= free_before);
 }
 
-void test_kheap_allocates_larger_than_one_page(void) {
+static void assert_kheap_allocates_larger_than_one_page(void) {
     reset_test_heap();
 
     void *p = kmalloc(PAGE_SIZE * 2U + 123U);
@@ -52,7 +52,7 @@ void test_kheap_allocates_larger_than_one_page(void) {
     kfree(p);
 }
 
-void test_kheap_allocates_panel_sized_backing_buffer(void) {
+static void assert_kheap_allocates_panel_sized_backing_buffer(void) {
     reset_test_heap();
 
     void *p = kmalloc(PANEL_BACKING_BYTES);
@@ -70,7 +70,7 @@ void test_kheap_allocates_panel_sized_backing_buffer(void) {
     kfree(p);
 }
 
-void test_kheap_reuses_large_freed_block_for_small_allocations(void) {
+static void assert_kheap_reuses_large_freed_block_for_small_allocations(void) {
     reset_test_heap();
 
     void *large = kmalloc(PANEL_BACKING_BYTES);
@@ -87,7 +87,7 @@ void test_kheap_reuses_large_freed_block_for_small_allocations(void) {
     kfree(small_b);
 }
 
-void test_kheap_large_alloc_free_cycles_remain_usable(void) {
+static void assert_kheap_large_alloc_free_cycles_remain_usable(void) {
     reset_test_heap();
 
     for (uint32_t i = 0; i < 8U; i++) {
@@ -99,6 +99,30 @@ void test_kheap_large_alloc_free_cycles_remain_usable(void) {
     void *final = kmalloc(PANEL_BACKING_BYTES);
     TEST_ASSERT_NOT_NULL(final);
     kfree(final);
+}
+
+void test_kheap_basic_alloc_free(void) {
+    assert_kheap_basic_alloc_free();
+    assert_kheap_allocates_larger_than_one_page();
+    assert_kheap_allocates_panel_sized_backing_buffer();
+    assert_kheap_reuses_large_freed_block_for_small_allocations();
+    assert_kheap_large_alloc_free_cycles_remain_usable();
+}
+
+void test_kheap_allocates_larger_than_one_page(void) {
+    assert_kheap_allocates_larger_than_one_page();
+}
+
+void test_kheap_allocates_panel_sized_backing_buffer(void) {
+    assert_kheap_allocates_panel_sized_backing_buffer();
+}
+
+void test_kheap_reuses_large_freed_block_for_small_allocations(void) {
+    assert_kheap_reuses_large_freed_block_for_small_allocations();
+}
+
+void test_kheap_large_alloc_free_cycles_remain_usable(void) {
+    assert_kheap_large_alloc_free_cycles_remain_usable();
 }
 
 /* main moved to tests/main.c */
