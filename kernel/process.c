@@ -20,6 +20,26 @@ static int process_in_table(const process_t *process) {
     return addr >= start && addr < end;
 }
 
+static void process_copy_name(process_t *process, const char *name) {
+    uint32_t i = 0;
+
+    if (process == 0) {
+        return;
+    }
+
+    for (i = 0; i < PROCESS_NAME_LEN; i++) {
+        process->name_storage[i] = '\0';
+    }
+
+    if (name != 0) {
+        for (i = 0; i + 1U < PROCESS_NAME_LEN && name[i] != '\0'; i++) {
+            process->name_storage[i] = name[i];
+        }
+    }
+
+    process->name = process->name_storage;
+}
+
 static void region_clear(process_user_region_t *region) {
     if (region == 0) {
         return;
@@ -188,7 +208,7 @@ void process_init(process_t *process, uint32_t pid, const char *name) {
     }
 
     process->pid = pid;
-    process->name = name;
+    process_copy_name(process, name);
     process->sp = 0;
     process->pc = 0;
     process->pstate = 0;
@@ -392,21 +412,17 @@ int process_remove_user_region_info(process_t *process, uint64_t start,
     for (uint32_t i = 0; i < process->user_region_count; i++) {
         process_user_region_t *region = &process->user_regions[i];
 
-        if (region->start != start || region->end != end) {
-            continue;
+        if (region->start == start && region->end == end) {
+            region_copy(removed, region);
+
+            for (uint32_t j = i + 1; j < process->user_region_count; j++) {
+                process->user_regions[j - 1] = process->user_regions[j];
+            }
+
+            region_clear(&process->user_regions[process->user_region_count - 1]);
+            process->user_region_count--;
+            return 0;
         }
-
-        region_copy(removed, region);
-
-        for (uint32_t move = i + 1; move < process->user_region_count; move++) {
-            region_copy(&process->user_regions[move - 1],
-                        &process->user_regions[move]);
-        }
-
-        process->user_region_count--;
-        region_clear(&process->user_regions[process->user_region_count]);
-
-        return 0;
     }
 
     return -1;
@@ -435,7 +451,7 @@ int process_user_range_contains(const process_t *process, uint64_t start, uint64
     for (uint32_t i = 0; i < process->user_region_count; i++) {
         const process_user_region_t *region = &process->user_regions[i];
 
-        if (start >= region->start && end >= start && end <= region->end) {
+        if (start >= region->start && end <= region->end) {
             return 1;
         }
     }
