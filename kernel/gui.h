@@ -28,6 +28,11 @@
 #define GUI_EVENT_QUEUE_SIZE 32U
 #define GUI_NO_OWNER         0xffffffffU
 
+#define GUI_WINDOW_NO_FOCUS     (1U << 0)
+#define GUI_WINDOW_NO_DRAG      (1U << 1)
+#define GUI_WINDOW_SKIP_TASKBAR (1U << 2)
+#define GUI_WINDOW_DOCK         (1U << 3)
+
 #define GUI_EVENT_KEY_PRESS   1U
 #define GUI_EVENT_KEY_RELEASE 2U
 #define GUI_EVENT_MOUSE_CLICK 3U
@@ -53,6 +58,10 @@ typedef struct {
      * Window ids remain stable pool indices; focusing raises by bumping
      * this field, never by moving window structs. */
     uint32_t z;
+    /* Per-window policy flags. These describe window-manager behavior, not
+     * drawing. For example, a dock/taskbar should receive mouse events but
+     * should not become the focused application window or be draggable. */
+    uint32_t flags;
     /* Kernel-drawn title bar height in pixels. 0 means no title bar.
      * When set, the kernel paints a solid bar at the top of the window
      * and draws the title text inside it during gui_draw_window. Owner
@@ -155,7 +164,7 @@ int gui_window_draw_rect(gui_desktop_t *desktop, uint32_t window_id,
                          int32_t x, int32_t y, uint32_t w, uint32_t h,
                          uint32_t color);
 int gui_window_clear(gui_desktop_t *desktop, uint32_t window_id,
-                      uint32_t color);
+                     uint32_t color);
 int gui_window_ensure_backing(gui_window_t *window);
 void gui_window_free_backing(gui_window_t *window);
 /* Damage tracking. gui_damage_add pushes a framebuffer-coords rect onto the
