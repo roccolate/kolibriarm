@@ -73,7 +73,7 @@ OBJS := \
     $(BUILD_DIR)/kernel/sched/sched.o \
     $(BUILD_DIR)/kernel/sched/switch.o \
     $(BUILD_DIR)/kernel/syscall.o \
-    $(BUILD_DIR)/kernel/timer.o \
+    $(BUILD_DIR)/kernel/timer/timer.o \
     $(BUILD_DIR)/kernel/tmpfs.o \
     $(BUILD_DIR)/kernel/user_demo.o \
     $(BUILD_DIR)/kernel/user_entry.o \
