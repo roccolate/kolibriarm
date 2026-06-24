@@ -45,39 +45,53 @@ assembly syscalls with a tiny userland library later.
 - GICv2 init, timer PPI, UART0 RX IRQ, C handler table
 - virtio-gpu modern MMIO driver; 640x480 scanout
 - virtio-input modern MMIO driver; events queued for keyboard and mouse
-- virtio-blk sector read/write; FAT32 BPB parse, root 8.3 listing, limited
-  overwrite of preallocated files
+- virtio-blk sector read/write; FAT32 BPB parse, root 8.3 listing, full
+  create/rename/delete and chain growth in addition to limited overwrite
+  of preallocated files
 - tmpfs (in-RAM) with create/read/write/delete
 - Fixed VFS, bootfs seed, named program registry, `/kolibri/<name>` app paths
-- Fixed-message IPC `sys_ipc_send` / `sys_ipc_recv`
+- Fixed-message IPC `sys_ipc_send` / `sys_ipc_recv` (syscalls 60-61)
 - Bitmap 8x8 font (ported from KolibriOS `8X8ISXP`), scalar 2D primitives,
   alpha blending, clipping
 - Kernel-owned GUI compositor with per-process windows, cursor, focus, drag,
-  title bars, and title-bar close events
+  title bars, title-bar close events, and per-window BGRA backing buffers
+- Coalesced damage-rectangle tracking (cap 32 + "full" sentinel) so
+  `gui_draw` can repaint just the regions that changed
+- Window syscalls 70-80 (`SYS_WINDOW_CREATE/DESTROY/DRAW_TEXT/DRAW_RECT/EVENT/SET_TITLE/REDRAW/FOCUS/FOR_PID`, `SYS_CURSOR_SET_SHAPE`, `SYS_WINDOW_FLUSH`)
+- `SYS_SPAWN_ARGV` (8) places `argc` in `x0` and `&argv[0]` in `x1` per the
+  AArch64 procedure-call ABI
+- ELF-style flat-image loader (`kernel/user_image.c`) accepting both
+  `USER_IMAGE_MAGIC` (`KLI1`) and `USER_KOS_MAGIC` (`KOS`) headers
 - Panel taskbar app booted automatically as the first EL0 process
-- Kernel debug console (`k>`) with help/mem/ps/ticks/storage/fb
+- Kernel debug console (`k>`) with help/mem/ps/ticks/storage/fb/mouse/click
 - From-scratch virtio-net + DHCP client, polled by the kernel console thread
+- USB HID boot-protocol stack: PCI ECAM walker, xHCI/UHCI driver skeletons,
+  configuration-descriptor walker, HID boot keyboard/mouse report parsers
+  feeding the same `input_queue` as UART and virtio-input
 
 ### Remaining rough edges
 
 - The app ABI is still direct AArch64 assembly syscalls; there is no C
   userland helper library yet.
-- The shell owns a window and supports a small command set, but it has no real
-  argv passing, scrollback, cursor rendering, or terminal emulation.
+- The shell owns a window and supports a small command set, but it has no
+  real scrollback, cursor rendering, or terminal emulation. (argv passing
+  through `SYS_SPAWN_ARGV` is in place and exercised by `run X Y Z`.)
 - The editor owns a window and edits `/tmp/note`, but it is intentionally
-  minimal: no cursor rendering, no scrolling, no arrow movement, and only the
-  first screenful is drawn.
+  minimal: no cursor rendering, no scrolling, no arrow movement, and only
+  the first screenful is drawn.
 - The monitor owns a window and draws a compact `sys_proclist`/`sys_meminfo`
   view, but it still has only the simplest fixed layout.
-- Window redraw is damage-tracked at the framebuffer level: the
-  compositor keeps a coalesced damage list (cap 32, with a "full"
-  sentinel) and `gui_draw` only repaints the regions that have changed
-  since the last clear. Per-window backing buffers hold the content; the
-  per-rect list is the next step's optimization once the larger
-  one-screen cost proves too high.
+- Live app redraws still go through the full sentinel. Apps call
+  `SYS_WINDOW_REDRAW` (76) which triggers `gui_request_redraw`; the
+  per-rect path in `gui_draw` is exercised only by tests, not by user
+  input. `SYS_WINDOW_FLUSH` (80) lets an app push a content-local dirty
+  rect but no app uses it yet.
 - Resize is defined in the event ABI but not produced. Minimize/maximize and
   taskbar-owned focus controls are not implemented.
 - Phase 8 (RPi 4 port) builds but has never been booted on hardware.
+- `kernel/user_demo.c` still owns an embedded boot program. AGENTS.md said
+  to keep it until a tiny loader-owned image existed; that loader exists
+  now (`kernel/user_image.c`), so this is the next cleanup.
 
 ---
 
@@ -227,11 +241,65 @@ Exit criteria:
 - [x] Damage-rectangle tracking. The compositor keeps a coalesced damage
       list (cap 32, with a "full" sentinel that short-circuits further
       adds) and `gui_draw` walks the list so each redraw only repaints
-      the regions that actually changed. `sys_window_flush` (syscall 80)
-      lets EL0 apps push a content-local dirty rect, which the kernel
-      converts to framebuffer coordinates. Planned IPC numbers shifted
-      from 80-89 to 90-99 to keep the live GUI calls in a single
-      contiguous range.
+      the regions that actually changed. The kernel-side path is solid;
+      no app uses `SYS_WINDOW_FLUSH` (80) yet, so live app redraws still
+      fall through the full sentinel.
+
+---
+
+## Debug / review / finish
+
+Concrete items the kernel needs before Phase 10.5 can be honestly checked off.
+Each one names the command that proves it.
+
+### A. Interactive QEMU verification (no host test substitutes)
+
+The host suite covers the GUI primitives in isolation, but several exit
+criteria only become true when a windowed session runs end to end.
+
+1. `make qemu-fb-visible` — visible mouse cursor that tracks the device.
+   Manual check; covers Phase 10.1.
+2. Same target — click an editor icon on the panel and confirm `/tmp/note`
+   editing shows up only inside the editor window. Covers Phase 10.3 and
+   Phase 10.4 (per-window isolation).
+3. Same target — open the four apps in sequence, close them via title-bar
+   close, and confirm no crash and no leaked window. Covers Phase 10.3 and
+   Phase 10.4.
+4. `make qemu-usb` — confirm the boot prints "USB: device on port 0/1"
+   stay visible and reach a clean input loop. Full HID delivery needs a
+   MMIO-BAR UHCI, which qemu-virt does not expose; record the gap rather
+   than chasing it.
+
+### B. Switch app redraws to the per-rect path
+
+`SYS_WINDOW_FLUSH` (80) is implemented (`kernel/syscall.c:694`) and
+`gui_draw`'s partial path is restored, but no app calls it. Edit
+`programs/apps/{editor,monitor,clock}.S` so each per-character or
+per-tick repaint issues `SYS_WINDOW_FLUSH` for the dirty content rect
+instead of `SYS_WINDOW_REDRAW`. Add a host test that runs the GUI in
+full-sentinel mode first and then per-rect mode and asserts the per-rect
+run touches fewer pixels. This closes Phase 10.2's "redraws only its own
+region on key event" exit criterion.
+
+### C. Code review leftovers from AGENTS.md audit
+
+Findings from the AGENTS.md review that still need a fix:
+
+- `drivers/input/virtio_input.c:5` includes `<string.h>` but uses none of
+  it. Drop the include or replace it with a comment.
+- `kernel/user_demo.c` still carries the embedded boot program. The
+  loader-owned image (`kernel/user_image.c`) covers the role, so delete
+  `user_demo.c` and have `kernel_main` go straight to the panel process
+  registered through bootfs. This is the next cleanup item in
+  "After the desktop" above.
+
+### D. Strict tests for the partial-redraw path
+
+Today the partial-redraw branch is only exercised by `make -C tests test`.
+Add a test that drives a 16×16 desktop, adds `(0,0,1,1)`, runs `gui_draw`,
+and asserts that only pixel 0 changed and `pixels[1]` keeps its prior
+value. Once that test is the source of truth, the AGENTS.md build/test
+flow catches a regression in seconds.
 
 ---
 
@@ -248,9 +316,6 @@ candidates, in rough order of return on effort:
   with the window. The first concrete partial-update bug — the
   previous compositor leaving the app's content stranded at the
   window's old framebuffer position after a drag — is gone.
-  Damage-rectangle tracking is still possible later as a
-  smaller-footprint alternative once a single huge backing proves
-  too costly.
 - **USB HID foundations (done).** `drivers/pci/` walks the ECAM at
   0x4010000000 and decodes BARs; `drivers/usb/hid.{c,h}` parses boot
   reports (8-byte keyboard, 3-byte mouse); `drivers/usb/usb_core.{c,h}`
@@ -268,8 +333,18 @@ candidates, in rough order of return on effort:
   every tick. Live `make qemu-usb` reaches "USB: controller
   initialized" and "USB: device on port 0/1" on the qemu-xhci path;
   full HID event delivery needs a UHCI controller with MMIO BARs
-  (QEMU virt's `piix3-usb-uhci` is I/O-only, which is the next gap
-  to close).
+  (QEMU virt's `piix3-usb-uhci` is I/O-only, which is the next gap to
+  close).
+- **Switch apps to per-rect redraws.** Today every app redraw goes
+  through `SYS_WINDOW_REDRAW` (76), which calls `gui_request_redraw`
+  and collapses to the full sentinel. The next iteration is to call
+  `SYS_WINDOW_FLUSH` (80) from the editor/clock/monitor after each
+  small change so the partial `gui_draw` path is exercised in
+  practice, not just in the host suite.
+- **Remove the embedded user demo.** `kernel/user_demo.c` was kept
+  while no loader-owned image existed. `kernel/user_image.c` now
+  fills that role; deleting `user_demo.c` shrinks the kernel and
+  removes a parallel boot path that confuses readers.
 - SMP: enable the secondary cores after the uniprocessor desktop is stable.
 - A minimal TCP/HTTP client for `wget` style apps.
 - Real hardware boot on RPi 4 with the same desktop visible over HDMI.
