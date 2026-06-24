@@ -160,13 +160,8 @@ static int setup_event_queue(uint64_t base) {
         g_desc[i].addr = (uint64_t)(uintptr_t)&g_events[i];
         g_desc[i].len = sizeof(virtio_input_event_t);
         g_desc[i].flags = VIRTQ_DESC_F_WRITE;
-        g_desc[i].next = (i + 1) % qsize;
-    }
-
-    g_avail.flags = 0;
-    g_avail.idx = 0;
-    for (uint32_t i = 0; i < qsize; i++) {
-        g_avail.ring[i] = i;
+        g_desc[i].next = 0;
+        g_avail.ring[i] = (uint16_t)i;
     }
 
     virtio_write64(base, VIRTIO_MMIO_QUEUE_DESC_LOW, VIRTIO_MMIO_QUEUE_DESC_HIGH,
@@ -177,8 +172,11 @@ static int setup_event_queue(uint64_t base) {
                    (uint64_t)(uintptr_t)&g_used);
 
     mb();
+    g_avail.idx = (uint16_t)qsize;
+    mb();
 
     virtio_write32(base, VIRTIO_MMIO_QUEUE_READY, 1);
+    virtio_write32(base, VIRTIO_MMIO_QUEUE_NOTIFY, VIRTIO_INPUT_EVENTQ);
 
     return 0;
 }
@@ -202,6 +200,7 @@ int virtio_input_init(virtio_input_device_t *device, uint64_t base) {
 
     status |= VIRTIO_STATUS_DRIVER_OK;
     virtio_write32(base, VIRTIO_MMIO_STATUS, status);
+    virtio_write32(base, VIRTIO_MMIO_QUEUE_NOTIFY, VIRTIO_INPUT_EVENTQ);
 
     device->ready = 1;
 
@@ -225,8 +224,15 @@ int virtio_input_poll(virtio_input_device_t *device) {
     while (device->last_used_idx != g_used.idx) {
         mb();
 
-        uint16_t slot = device->last_used_idx % device->queue_size;
-        virtio_input_event_t *ev = &g_events[slot];
+        uint16_t used_slot = device->last_used_idx % device->queue_size;
+        uint32_t desc_id = g_used.ring[used_slot].id;
+
+        if (desc_id >= device->queue_size) {
+            device->last_used_idx++;
+            continue;
+        }
+
+        virtio_input_event_t *ev = &g_events[desc_id];
 
         input_event_t event = {0};
         event.timestamp = 0;
@@ -272,9 +278,13 @@ int virtio_input_poll(virtio_input_device_t *device) {
 
         device->last_used_idx++;
 
+        uint16_t avail_slot = g_avail.idx % device->queue_size;
+        g_avail.ring[avail_slot] = (uint16_t)desc_id;
+
         mb();
         g_avail.idx++;
         mb();
+        virtio_write32(device->base, VIRTIO_MMIO_QUEUE_NOTIFY, VIRTIO_INPUT_EVENTQ);
     }
 
     return 0;
