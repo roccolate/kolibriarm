@@ -253,10 +253,10 @@ panel_redraw_all:
     mov x0, x19
     mov x1, #0
     mov x2, #0
-    movz x3, #0xff20, lsl #16
-    movk x3, #0x2428
-    movz x4, #SCREEN_W & 0xffff, lsl #0
-    mov x5, #PANEL_H
+    mov x3, #SCREEN_W
+    mov x4, #PANEL_H
+    movz x5, #0xff20, lsl #16
+    movk x5, #0x2428
     mov x8, #SYS_WINDOW_DRAW_RECT
     svc #0
 
