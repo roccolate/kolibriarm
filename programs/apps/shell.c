@@ -1,4 +1,4 @@
-// KolibriARM app: shell (C version)
+// KolibriARM app: shell (C version, on libkarm + libkarmdesk)
 //
 // Minimal windowed command shell. It reads key events from its GUI
 // window, keeps a tiny fixed line history, and supports a small
@@ -8,12 +8,11 @@
 // SYS_SPAWN_ARGV so each arg lands in the new process's argv[] on
 // its initial stack.
 //
-// This is the fourth app migrated to programs/libkarm. Process
-// spawn/kill, I/O readdir, and system info calls all go through
-// libkarm's typed wrappers in <libkarm/syscall.h>; number formatting
-// uses kli_utoa from <libkarm/string.h>. Window syscalls still go
-// through libkarm's raw __syscallN trampolines — programs/libkarmdesk
-// is not built yet.
+// Non-window syscalls (spawn, spawn_argv, kill, readdir, timeinfo,
+// meminfo, proclist, write, yield, exit) go through libkarm's typed
+// wrappers. Number formatting and string compare go through
+// <libkarm/string.h>. Window syscalls go through libkarmdesk's
+// typed gui_* wrappers.
 
 #include <stddef.h>
 #include <stdint.h>
@@ -21,7 +20,7 @@
 #include "libkarm/syscall.h"
 #include "libkarm/string.h"
 #include "libkarm/errno.h"
-#include "kernel/syscall_numbers.h"
+#include "libkarmdesk/gui.h"
 
 #define WIN_X           72
 #define WIN_Y           52
@@ -40,18 +39,7 @@
 #define COLOR_BORDER     0xff708870U
 #define COLOR_TEXT       0xffd8e8d8U
 
-// gui_event_t must match kernel/gui.h: type(u32) data1(i32) data2(i32).
-typedef struct {
-    uint32_t type;
-    int32_t  data1;
-    int32_t  data2;
-} gui_event_t;
-
-#define GUI_EVENT_KEY_PRESS  1U
-#define GUI_EVENT_CLOSE      6U
-
 // Arrow keys come in as synthetic codes from drivers/input/input.c.
-// See drivers/input/input.h.
 #define INPUT_KEY_UP    0x101
 #define INPUT_KEY_DOWN  0x102
 
@@ -62,44 +50,6 @@ typedef struct {
     char     name[16];
 } proc_entry_t;
 
-// Window/compositor syscalls via libkarm's raw trampolines.
-extern long __syscall1(long n, long a0);
-extern long __syscall3(long n, long a0, long a1, long a2);
-extern long __syscall6(long n, long a0, long a1, long a2,
-                       long a3, long a4, long a5);
-
-static long win_create(long x, long y, long w, long h,
-                       long bg, long border) {
-    return __syscall6(SYS_WINDOW_CREATE, x, y, w, h, bg, border);
-}
-
-static long win_destroy(long wid) {
-    return __syscall1(SYS_WINDOW_DESTROY, wid);
-}
-
-static long win_set_title(long wid, const char *title, long h) {
-    return __syscall3(SYS_WINDOW_SET_TITLE, wid, (long)(uintptr_t)title, h);
-}
-
-static long win_draw_rect(long wid, long x, long y, long w, long h,
-                          long color) {
-    return __syscall6(SYS_WINDOW_DRAW_RECT, wid, x, y, w, h, color);
-}
-
-static long win_draw_text(long wid, long x, long y, long color,
-                          const char *str) {
-    return __syscall6(SYS_WINDOW_DRAW_TEXT, wid, x, y, color,
-                      (long)(uintptr_t)str, 0);
-}
-
-static long win_flush(long wid, long x, long y, long w, long h) {
-    return __syscall6(SYS_WINDOW_FLUSH, wid, x, y, w, h, 0);
-}
-
-static long win_event(long wid, gui_event_t *buf, long cap) {
-    return __syscall3(SYS_WINDOW_EVENT, wid, (long)(uintptr_t)buf, cap);
-}
-
 static void write_cstr(long fd, const char *s) {
     while (*s) {
         (void)kli_write((int)fd, s, 1);
@@ -107,23 +57,20 @@ static void write_cstr(long fd, const char *s) {
     }
 }
 
-// Shell state — all on the C stack/globals inside main. Static
-// globals would work too but keeping everything in main() makes the
-// state obvious at a glance.
 typedef struct {
-    char       line[LINE_CAP];   // current input
+    char       line[LINE_CAP];
     size_t     line_len;
     char       display[DISPLAY_LINES][DISPLAY_COLS];
     char       history[HISTORY_DEPTH][LINE_CAP];
     int        history_count;
-    int        history_cursor;   // == history_count when at "live"
+    int        history_cursor;
     int        last_spawned_pid;
     long       wid;
     uint64_t   info[3];
     char       numbuf[24];
     proc_entry_t procs[PROC_CAP];
     char       argv_strs[ARGV_MAX][LINE_CAP];
-    uint64_t   argv_ptrs[ARGV_MAX];   // kernel sees these as raw u64 addresses
+    uint64_t   argv_ptrs[ARGV_MAX];
 } shell_state_t;
 
 static void display_clear(shell_state_t *s) {
@@ -134,9 +81,6 @@ static void display_clear(shell_state_t *s) {
     }
 }
 
-// Shift every display row up by one and copy `line` into the last
-// row, truncating with a NUL terminator. `line` may be any length;
-// only the first DISPLAY_COLS - 1 bytes are kept.
 static void push_line(shell_state_t *s, const char *line) {
     for (int i = 0; i < DISPLAY_LINES - 1; i++) {
         for (int j = 0; j < DISPLAY_COLS; j++) {
@@ -155,14 +99,12 @@ static void push_line(shell_state_t *s, const char *line) {
 }
 
 static void draw_text(long wid, long x, long y, const char *s) {
-    (void)win_draw_text(wid, x, y, COLOR_TEXT, s);
+    (void)gui_window_draw_text(wid, x, y, COLOR_TEXT, s);
 }
 
 static void redraw(shell_state_t *s) {
-    // Clear content area (everything below the kernel-drawn title bar).
-    (void)win_draw_rect(s->wid, 1, 0, WIN_W - 2,
-                        WIN_H - TITLE_BAR_H - 2, COLOR_BG);
-
+    (void)gui_window_draw_rect(s->wid, 1, 0, WIN_W - 2,
+                               WIN_H - TITLE_BAR_H - 2, COLOR_BG);
     draw_text(s->wid, 12, 8, "USER SHELL");
     for (int i = 0; i < DISPLAY_LINES; i++) {
         draw_text(s->wid, 12, 28 + i * 16, s->display[i]);
@@ -170,13 +112,9 @@ static void redraw(shell_state_t *s) {
     draw_text(s->wid, 12, 168, "U");
     draw_text(s->wid, 32, 168, s->line);
     draw_text(s->wid, 12, 196, "ENTER RUNS COMMAND");
-
-    (void)win_flush(s->wid, 0, 0, WIN_W, WIN_H - TITLE_BAR_H);
+    (void)gui_window_flush(s->wid, 0, 0, WIN_W, WIN_H - TITLE_BAR_H);
 }
 
-// History ring: cursor == count means "live" (current line), 0..count
-// are the stored entries. Push non-empty input; Up walks back, Down
-// walks forward.
 static void history_push(shell_state_t *s) {
     if (s->line_len == 0) {
         return;
@@ -188,7 +126,6 @@ static void history_push(shell_state_t *s) {
         s->history[s->history_count][s->line_len] = '\0';
         s->history_count++;
     } else {
-        // Drop the oldest, shift up.
         for (int i = 0; i < HISTORY_DEPTH - 1; i++) {
             for (size_t j = 0; j < LINE_CAP; j++) {
                 s->history[i][j] = s->history[i + 1][j];
@@ -215,8 +152,6 @@ static void history_load(shell_state_t *s, int idx) {
     s->line_len = n;
 }
 
-// Command handlers --------------------------------------------------------
-
 static int starts_with(const char *s, const char *prefix) {
     while (*prefix != '\0') {
         if (*s != *prefix) {
@@ -228,11 +163,7 @@ static int starts_with(const char *s, const char *prefix) {
     return 1;
 }
 
-// shell_cmd_run: parse "run X Y Z" and spawn X with argv = ["X","Y","Z"].
-// The first whitespace-delimited token is the app name; remaining tokens
-// are passed as argv to the spawned process via SYS_SPAWN_ARGV.
 static void cmd_run(shell_state_t *s, const char *input) {
-    // Skip "run ".
     while (*input == ' ') {
         input++;
     }
@@ -241,8 +172,6 @@ static void cmd_run(shell_state_t *s, const char *input) {
         return;
     }
     int argc = 0;
-    // Tokenise into argv_strs (kernel can copy from there). argv_ptrs
-    // carries the pointer array expected by sys_spawn_argv.
     const char *p = input;
     while (*p != '\0' && argc < ARGV_MAX) {
         while (*p == ' ') {
@@ -270,7 +199,6 @@ static void cmd_run(shell_state_t *s, const char *input) {
         push_line(s, "RUN FAILED");
         return;
     }
-    // Build "/kolibri/<name>".
     char path[32];
     const char *prefix = "/kolibri/";
     size_t pi = 0;
@@ -321,8 +249,6 @@ static void dispatch(shell_state_t *s, const char *line) {
         }
         push_line(s, "PROCESSES");
         for (long i = 0; i < n && i < PROC_CAP; i++) {
-            // proc.name is a 16-byte fixed field; null-terminate
-            // before pushing so push_line sees a cstring.
             char name_buf[17];
             for (int j = 0; j < 16; j++) {
                 char c = s->procs[i].name[j];
@@ -352,9 +278,7 @@ static void dispatch(shell_state_t *s, const char *line) {
     } else if (strcmp(line, "pwd") == 0) {
         push_line(s, "ROOT");
     } else if (strcmp(line, "exit") == 0) {
-        (void)win_destroy(s->wid);
-        // kli_exit via crt0 returns the main return value.
-        // Use kli_exit explicitly so the loop is bypassed.
+        (void)gui_window_destroy(s->wid);
         kli_exit(0);
         for (;;) {
             (void)kli_yield();
@@ -365,8 +289,8 @@ static void dispatch(shell_state_t *s, const char *line) {
 }
 
 static void handle_key(shell_state_t *s, int key) {
-    if (key == 17) {                              // Ctrl-Q
-        (void)win_destroy(s->wid);
+    if (key == 17) {
+        (void)gui_window_destroy(s->wid);
         kli_exit(0);
         for (;;) {
             (void)kli_yield();
@@ -392,15 +316,14 @@ static void handle_key(shell_state_t *s, int key) {
         }
         return;
     }
-    if (key == 8 || key == 127) {                 // backspace
+    if (key == 8 || key == 127) {
         if (s->line_len > 0) {
             s->line_len--;
             s->line[s->line_len] = '\0';
         }
         return;
     }
-    if (key == 13 || key == 10) {                 // enter
-        // NUL-terminate for strcmp / dispatch.
+    if (key == 13 || key == 10) {
         s->line[s->line_len] = '\0';
         char submitted[LINE_CAP];
         for (size_t i = 0; i <= s->line_len; i++) {
@@ -408,7 +331,6 @@ static void handle_key(shell_state_t *s, int key) {
         }
         history_push(s);
         dispatch(s, submitted);
-        // Clear the input line for the next command.
         for (size_t i = 0; i < s->line_len; i++) {
             s->line[i] = '\0';
         }
@@ -442,24 +364,25 @@ int main(int argc, char **argv) {
 
     write_cstr(1, "shell: starting\n");
 
-    s.wid = win_create(WIN_X, WIN_Y, WIN_W, WIN_H, COLOR_BG, COLOR_BORDER);
+    s.wid = gui_window_create(WIN_X, WIN_Y, WIN_W, WIN_H,
+                              COLOR_BG, COLOR_BORDER, "shell");
     if (s.wid < 0) {
         write_cstr(1, "shell: window create failed\n");
         return 1;
     }
-    (void)win_set_title(s.wid, "shell", TITLE_BAR_H);
+    (void)gui_window_set_title(s.wid, "shell", TITLE_BAR_H);
 
     push_line(&s, "SHELL READY");
     redraw(&s);
 
     gui_event_t events[EVENT_CAP];
     for (;;) {
-        long n = win_event(s.wid, events, EVENT_CAP);
+        long n = gui_window_event(s.wid, events, EVENT_CAP);
         if (n > 0) {
             int dirty = 0;
             for (long i = 0; i < n; i++) {
                 if (events[i].type == GUI_EVENT_CLOSE) {
-                    (void)win_destroy(s.wid);
+                    (void)gui_window_destroy(s.wid);
                     return 0;
                 }
                 if (events[i].type == GUI_EVENT_KEY_PRESS) {
