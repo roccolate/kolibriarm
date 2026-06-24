@@ -419,3 +419,246 @@ void test_fat32_mount_vfs_file_writes_through_vfs(void) {
     TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)vfs_stat("/fat/hello.txt", &stat));
     TEST_ASSERT_EQUAL_UINT64(sizeof(input), stat.size);
 }
+
+/*
+ * Common helper that prepares a writable FAT32 image with a small
+ * unused cluster range we can allocate into (cluster 5 is free in
+ * the default setup).
+ */
+static void test_setup_fat32_disk_writable(test_fat32_disk_t *disk,
+                                          fat32_fs_t *fs) {
+    test_setup_fat32_disk(disk);
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)fat32_mount(
+                                 fs, test_disk_read_sector, disk));
+    fat32_set_write_sector(fs, test_disk_write_sector);
+}
+
+void test_fat32_create_writes_dir_entry_and_allocates_cluster(void) {
+    test_fat32_disk_t disk;
+    fat32_fs_t fs;
+    fat32_file_t file;
+
+    test_setup_fat32_disk_writable(&disk, &fs);
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)fat32_create(&fs, "NOTE.TXT", &file));
+    /* New file gets a freshly allocated cluster and a writable handle. */
+    TEST_ASSERT_TRUE(file.first_cluster >= 2U);
+    TEST_ASSERT_EQUAL_UINT64(FAT32_SECTOR_SIZE, file.capacity);
+    TEST_ASSERT_EQUAL_UINT64(0, file.size);
+
+    /*
+     * The directory entry is on the same sector as HELLO.TXT (the
+     * setup only has one root cluster) and uses the second 32-byte
+     * slot because HELLO.TXT occupies the first.
+     */
+    TEST_ASSERT_EQUAL_UINT64(file.dir_lba, 2U);
+    TEST_ASSERT_EQUAL_UINT64(32U, file.dir_offset);
+
+    /* The on-disk entry must carry the requested short name. */
+    const uint8_t want_name[11] = { 'N','O','T','E',' ',' ',' ',' ','T','X','T' };
+    for (uint32_t i = 0; i < 11U; i++) {
+        TEST_ASSERT_EQUAL_UINT64(want_name[i],
+                                 disk.sectors[file.dir_lba]
+                                              [file.dir_offset + i]);
+    }
+}
+
+void test_fat32_create_then_write_persists_through_open(void) {
+    test_fat32_disk_t disk;
+    fat32_fs_t fs;
+    fat32_file_t file;
+    uint8_t payload[] = { 'h', 'i', '\n' };
+    uint8_t output[8] = { 0 };
+    uint64_t count = 99;
+
+    test_setup_fat32_disk_writable(&disk, &fs);
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)fat32_create(&fs, "NOTE.TXT", &file));
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)fat32_write(&fs, &file, 0, payload,
+                                                   sizeof(payload), &count));
+    TEST_ASSERT_EQUAL_UINT64(sizeof(payload), count);
+
+    /*
+     * Re-opening the file by name should yield the same content,
+     * proving that the directory entry, the FAT chain, and the data
+     * cluster all stay consistent across mount + open cycles.
+     */
+    fat32_file_t reopen;
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)fat32_open_root(&fs, "NOTE.TXT",
+                                                         &reopen));
+    TEST_ASSERT_EQUAL_UINT64(file.first_cluster, reopen.first_cluster);
+    TEST_ASSERT_EQUAL_UINT64(sizeof(payload), reopen.size);
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)fat32_read(&fs, &reopen, 0, output,
+                                                   sizeof(output), &count));
+    TEST_ASSERT_EQUAL_UINT64(sizeof(payload), count);
+    TEST_ASSERT_EQUAL_UINT64('h', output[0]);
+    TEST_ASSERT_EQUAL_UINT64('i', output[1]);
+    TEST_ASSERT_EQUAL_UINT64('\n', output[2]);
+}
+
+void test_fat32_create_rejects_duplicate_name(void) {
+    test_fat32_disk_t disk;
+    fat32_fs_t fs;
+    fat32_file_t file;
+
+    test_setup_fat32_disk_writable(&disk, &fs);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
+                             (uint64_t)fat32_create(&fs, "HELLO.TXT",
+                                                       &file));
+}
+
+void test_fat32_write_grows_chain_when_capacity_exhausted(void) {
+    test_fat32_disk_t disk;
+    fat32_fs_t fs;
+    fat32_file_t file;
+    uint8_t payload[FAT32_SECTOR_SIZE * 2];
+    uint8_t output[FAT32_SECTOR_SIZE * 2];
+    uint64_t count = 99;
+
+    test_setup_fat32_disk_writable(&disk, &fs);
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)fat32_open_root(&fs, "HELLO.TXT",
+                                                         &file));
+
+    /*
+     * The HELLO.TXT setup only preallocates two clusters (3, 4).
+     * Writing twice the cluster size forces a brand-new allocation.
+     */
+    for (uint32_t i = 0; i < sizeof(payload); i++) {
+        payload[i] = (uint8_t)(i & 0xffU);
+    }
+
+    TEST_ASSERT_EQUAL_UINT64(
+        0, (uint64_t)fat32_write(&fs, &file, 0, payload, sizeof(payload),
+                                  &count));
+    TEST_ASSERT_EQUAL_UINT64(sizeof(payload), count);
+    TEST_ASSERT_EQUAL_UINT64(sizeof(payload), file.size);
+    TEST_ASSERT_EQUAL_UINT64(sizeof(payload), file.capacity);
+
+    TEST_ASSERT_EQUAL_UINT64(
+        0, (uint64_t)fat32_read(&fs, &file, 0, output, sizeof(output),
+                                  &count));
+    TEST_ASSERT_EQUAL_UINT64(sizeof(payload), count);
+    for (uint32_t i = 0; i < sizeof(payload); i++) {
+        TEST_ASSERT_EQUAL_UINT64(payload[i], output[i]);
+    }
+}
+
+void test_fat32_delete_frees_chain_and_removes_entry(void) {
+    test_fat32_disk_t disk;
+    fat32_fs_t fs;
+    fat32_file_t file;
+    uint32_t first_fat;
+    uint32_t second_fat;
+
+    test_setup_fat32_disk_writable(&disk, &fs);
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)fat32_open_root(&fs, "HELLO.TXT",
+                                                         &file));
+    first_fat = file.first_cluster;
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)fat32_delete(&fs, "HELLO.TXT"));
+
+    /*
+     * After delete, open_root returns -ENOENT and the FAT entries
+     * for the released clusters are back to 0 (free).
+     */
+    fat32_file_t gone;
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
+                             (uint64_t)fat32_open_root(&fs, "HELLO.TXT",
+                                                       &gone));
+
+    uint32_t fat_value = 0;
+    /*
+     * After delete, the FAT entry for the released cluster chain is
+     * back to 0. The HELLO.TXT setup preallocated clusters 3 and 4,
+     * so both FAT slots must now read zero.
+     */
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)disk.sectors[1][12]);
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)disk.sectors[1][13]);
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)disk.sectors[1][14]);
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)disk.sectors[1][15]);
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)disk.sectors[1][16]);
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)disk.sectors[1][17]);
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)disk.sectors[1][18]);
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)disk.sectors[1][19]);
+
+    /* The directory entry's first byte is now the deletion marker. */
+    TEST_ASSERT_EQUAL_UINT64(0xe5U,
+                             disk.sectors[file.dir_lba][file.dir_offset]);
+}
+
+void test_fat32_rename_updates_short_name_in_place(void) {
+    test_fat32_disk_t disk;
+    fat32_fs_t fs;
+    fat32_file_t file;
+
+    test_setup_fat32_disk_writable(&disk, &fs);
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)fat32_open_root(&fs, "HELLO.TXT",
+                                                         &file));
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)fat32_rename(&fs, "HELLO.TXT",
+                                                       "BYE.TXT"));
+
+    /* Old name gone, new name resolves to the same dir entry. */
+    fat32_file_t gone;
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
+                             (uint64_t)fat32_open_root(&fs, "HELLO.TXT",
+                                                       &gone));
+    fat32_file_t renamed;
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)fat32_open_root(&fs, "BYE.TXT",
+                                                         &renamed));
+    TEST_ASSERT_EQUAL_UINT64(file.dir_lba, renamed.dir_lba);
+    TEST_ASSERT_EQUAL_UINT64(file.dir_offset, renamed.dir_offset);
+    TEST_ASSERT_EQUAL_UINT64(file.first_cluster, renamed.first_cluster);
+}
+
+void test_fat32_rename_rejects_destination_collision(void) {
+    test_fat32_disk_t disk;
+    fat32_fs_t fs;
+    fat32_file_t extra;
+
+    test_setup_fat32_disk_writable(&disk, &fs);
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)fat32_create(&fs, "EXTRA.TXT", &extra));
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
+                             (uint64_t)fat32_rename(&fs, "HELLO.TXT",
+                                                       "EXTRA.TXT"));
+}
+
+void test_fat32_write_to_brand_new_file_uses_allocated_cluster(void) {
+    test_fat32_disk_t disk;
+    fat32_fs_t fs;
+    fat32_file_t file;
+    uint8_t payload[] = "fresh\n";
+    uint8_t output[8] = { 0 };
+    uint64_t count = 99;
+
+    test_setup_fat32_disk_writable(&disk, &fs);
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)fat32_create(&fs, "FRESH.TXT",
+                                                         &file));
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)fat32_write(&fs, &file, 0, payload,
+                                                   sizeof(payload) - 1U,
+                                                   &count));
+    TEST_ASSERT_EQUAL_UINT64(sizeof(payload) - 1U, count);
+    TEST_ASSERT_EQUAL_UINT64(sizeof(payload) - 1U, file.size);
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)fat32_read(&fs, &file, 0, output,
+                                                   sizeof(output), &count));
+    TEST_ASSERT_EQUAL_UINT64(sizeof(payload) - 1U, count);
+    for (uint32_t i = 0; i < sizeof(payload) - 1U; i++) {
+        TEST_ASSERT_EQUAL_UINT64(payload[i], output[i]);
+    }
+}

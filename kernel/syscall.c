@@ -23,6 +23,7 @@
 #define SYS_SPAWN 4ULL
 #define SYS_WAIT  6ULL
 #define SYS_KILL  7ULL
+#define SYS_SPAWN_ARGV 8ULL
 #define SYS_OPEN  40ULL
 #define SYS_CLOSE 41ULL
 #define SYS_READ  42ULL
@@ -32,6 +33,8 @@
 #define SYS_SEEK  44ULL
 #define SYS_STAT  45ULL
 #define SYS_READDIR 46ULL
+#define SYS_UNLINK 47ULL
+#define SYS_RENAME 48ULL
 #define SYS_IPC_SEND 60ULL
 #define SYS_IPC_RECV 61ULL
 #define SYS_WINDOW_CREATE    70ULL
@@ -145,7 +148,46 @@ static int64_t sys_spawn(uint64_t path_ptr, uint64_t entry_index) {
         return ERR_INVAL;
     }
 
-    pid = user_demo_spawn_vfs(path, (uint32_t)entry_index);
+    pid = user_demo_spawn_vfs(path, (uint32_t)entry_index, 0, 0);
+    if (pid < 0) {
+        return ERR_NOENT;
+    }
+
+    return pid;
+}
+
+static int64_t sys_spawn_argv(uint64_t path_ptr, uint64_t entry_index,
+                              uint64_t argv_ptr, uint64_t argc) {
+    char path[VFS_MAX_PATH];
+    int pid;
+
+    if (entry_index > 0xffffffffULL || argc > 0xffffffffULL ||
+        copy_user_cstr(path_ptr, path, sizeof(path)) != 0) {
+        return ERR_INVAL;
+    }
+
+    /*
+     * argv_ptr must point at `argc` uint64_t entries inside the
+     * caller's registered user regions when argc > 0. The strings
+     * they reference are validated by user_demo_spawn_vfs (it walks
+     * each one until '\0'). argc == 0 with argv_ptr == 0 is the
+     * "no argv" path and is always accepted; any other combination
+     * of argc and argv_ptr is rejected.
+     */
+    if (argc == 0) {
+        if (argv_ptr != 0) {
+            return ERR_INVAL;
+        }
+    } else {
+        if (argv_ptr == 0 ||
+            !user_range_contains(argv_ptr, argc * sizeof(uint64_t))) {
+            return ERR_INVAL;
+        }
+    }
+
+    pid = user_demo_spawn_vfs(path, (uint32_t)entry_index,
+                              (const uint64_t *)(uintptr_t)argv_ptr,
+                              (uint32_t)argc);
     if (pid < 0) {
         return ERR_NOENT;
     }
@@ -288,6 +330,32 @@ static int64_t sys_readdir(uint64_t path_ptr, uint64_t buf, uint64_t len) {
     }
 
     return (int64_t)bytes_written;
+}
+
+static int64_t sys_unlink(uint64_t path_ptr) {
+    char path[VFS_MAX_PATH];
+
+    if (copy_user_cstr(path_ptr, path, sizeof(path)) != 0) {
+        return ERR_INVAL;
+    }
+    if (vfs_unlink(path) != 0) {
+        return ERR_NOENT;
+    }
+    return 0;
+}
+
+static int64_t sys_rename(uint64_t old_ptr, uint64_t new_ptr) {
+    char old_path[VFS_MAX_PATH];
+    char new_path[VFS_MAX_PATH];
+
+    if (copy_user_cstr(old_ptr, old_path, sizeof(old_path)) != 0 ||
+        copy_user_cstr(new_ptr, new_path, sizeof(new_path)) != 0) {
+        return ERR_INVAL;
+    }
+    if (vfs_rename(old_path, new_path) != 0) {
+        return ERR_NOENT;
+    }
+    return 0;
 }
 
 static int64_t sys_meminfo(uint64_t info_ptr) {
@@ -730,6 +798,10 @@ void syscall_dispatch(exception_frame_t *frame) {
     case SYS_SPAWN:
         frame->x[0] = (uint64_t)sys_spawn(frame->x[0], frame->x[1]);
         break;
+    case SYS_SPAWN_ARGV:
+        frame->x[0] = (uint64_t)sys_spawn_argv(frame->x[0], frame->x[1],
+                                              frame->x[2], frame->x[3]);
+        break;
     case SYS_WAIT:
         frame->x[0] = (uint64_t)sys_wait(frame->x[0]);
         break;
@@ -763,6 +835,12 @@ void syscall_dispatch(exception_frame_t *frame) {
     case SYS_READDIR:
         frame->x[0] = (uint64_t)sys_readdir(frame->x[0], frame->x[1],
                                             frame->x[2]);
+        break;
+    case SYS_UNLINK:
+        frame->x[0] = (uint64_t)sys_unlink(frame->x[0]);
+        break;
+    case SYS_RENAME:
+        frame->x[0] = (uint64_t)sys_rename(frame->x[0], frame->x[1]);
         break;
     case SYS_IPC_SEND:
         frame->x[0] = (uint64_t)sys_ipc_send(current, frame->x[0],

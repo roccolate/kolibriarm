@@ -2,11 +2,15 @@
 //
 // Minimal windowed command shell. It reads key events from its GUI window,
 // keeps a tiny fixed line history, and supports a small command set:
-// help, ls, mem, ps, ticks, run <name>, kill last, and exit.
+// help, ls, mem, ps, ticks, run <name> [args...], kill last, and exit.
+// The `run` command splits its tail on whitespace and passes the
+// resulting tokens to the spawned app through SYS_SPAWN_ARGV so each
+// arg lands in the new process's argv[] on its initial stack.
 
 #define SYS_EXIT         1
 #define SYS_YIELD        2
 #define SYS_SPAWN        4
+#define SYS_SPAWN_ARGV   8
 #define SYS_KILL         7
 #define SYS_READDIR     46
 #define SYS_TIMEINFO   100
@@ -20,6 +24,12 @@
 #define SYS_WINDOW_SET_TITLE 75
 #define SYS_WINDOW_REDRAW    76
 
+// Synthetic key codes delivered through the GUI event queue when the
+// user presses arrow keys in a real terminal attached to the QEMU
+// serial console. See drivers/input/input.h.
+#define INPUT_KEY_UP    0x101
+#define INPUT_KEY_DOWN  0x102
+
 .equ WIN_X,          72
 .equ WIN_Y,          52
 .equ WIN_W,          480
@@ -30,13 +40,27 @@
 .equ DISPLAY_COLS,   48
 .equ EVENT_CAP,      8
 .equ PROC_CAP,       4
+// shell_argv: the argv[] pointer array plus per-token string buffers.
+// We hold up to 8 tokens (matches the kernel USER_DEMO_ARGV_MAX_STRINGS
+// cap) and the longest token can be LINE_CAP-1 bytes.
+.equ ARGV_MAX,       8
+.equ HISTORY_DEPTH,  8
 .equ OFF_LINE,       0
 .equ OFF_EVENTS,     64
 .equ OFF_LINES,      160
 .equ OFF_TEMP,       544
 .equ OFF_INFO,       608
 .equ OFF_PROCS,      640
-.equ FRAME_BYTES,    768
+// shell_history: a fixed-depth ring of the most recent non-empty
+// input lines. UP/DOWN navigation copies one entry into OFF_LINE so
+// the user can re-run or edit a previous command without retyping.
+.equ OFF_HISTORY,        (OFF_PROCS + PROC_CAP * 24)  // 728
+.equ OFF_HISTORY_COUNT,  (OFF_HISTORY + HISTORY_DEPTH * LINE_CAP)  // 1240
+.equ OFF_HISTORY_CURSOR, (OFF_HISTORY_COUNT + 8)      // 1248
+// shell_argv layout: argv_ptrs[ARGV_MAX] then argv_strs[ARGV_MAX][LINE_CAP].
+.equ OFF_ARGV_PTRS,  (OFF_HISTORY_CURSOR + 8)        // 1256
+.equ OFF_ARGV_STRS,  (OFF_ARGV_PTRS + ARGV_MAX * 8)   // 1320
+.equ FRAME_BYTES,    (OFF_ARGV_STRS + ARGV_MAX * LINE_CAP)   // 1832
 
 .section .user.image.header, "a"
 .global shell_image_header
@@ -72,6 +96,13 @@ shell_start:
     add x25, sp, #OFF_INFO           // info syscall buffer
     add x27, sp, #OFF_PROCS          // process-list buffer
     mov x26, #0                      // last spawned pid
+
+    // Initialise command history: zero entries, no navigation.
+    mov x9, sp
+    add x9, x9, #OFF_HISTORY_COUNT
+    str xzr, [x9]
+    add x9, x9, #8
+    str xzr, [x9]                     // history_cursor == history_count
 
     bl shell_clear_display
     adr x0, shell_ready
@@ -181,6 +212,10 @@ shell_handle_key:
     b.eq shell_backspace
     cmp x0, #127
     b.eq shell_backspace
+    cmp x0, #INPUT_KEY_UP
+    b.eq shell_history_up
+    cmp x0, #INPUT_KEY_DOWN
+    b.eq shell_history_down
     cmp x0, #32
     b.lt 9f
     cmp x0, #126
@@ -192,6 +227,127 @@ shell_handle_key:
     mov w1, #0
     strb w1, [x20, x21]
 9:
+    ret
+
+// shell_history_copy: copy the cstring at src (up to LINE_CAP-1 bytes)
+// into the current line buffer. Updates x21 (current input length).
+shell_history_copy:
+    mov x9, x0
+    mov x10, #0
+1:
+    cmp x10, #(LINE_CAP - 1)
+    b.ge 2f
+    ldrb w11, [x9, x10]
+    cbz w11, 2f
+    strb w11, [x20, x10]
+    add x10, x10, #1
+    b 1b
+2:
+    mov w11, #0
+    strb w11, [x20, x10]
+    mov x21, x10
+    ret
+
+// shell_history_push: append the current non-empty line to the history
+// buffer, shifting older entries up when the buffer is full.
+shell_history_push:
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+
+    cbz x21, shell_history_push_done
+    add x9, x29, #16
+    ldr x10, [x9, #OFF_HISTORY_COUNT]
+    cmp x10, #HISTORY_DEPTH
+    b.lt 2f
+
+    // Buffer full: shift entries [0..N-2] up by one slot.
+    mov x11, #0
+1:
+    cmp x11, x10
+    b.ge 2f
+    add x12, x11, #1
+    add x13, x9, #OFF_HISTORY
+    add x13, x13, x11, lsl #6         // x13 = &history[i]
+    add x14, x13, #64                // x14 = &history[i+1]
+    mov x15, #0
+    mov x16, #63                      // LINE_CAP - 1 + NUL
+    ldrb w17, [x14, x15]
+    strb w17, [x13, x15]
+    add x15, x15, #1
+    cmp x15, x16
+    b.lt 4f
+4:
+    mov x11, x12
+    b 1b
+2:
+    add x10, x10, #1
+    str x10, [x9, #OFF_HISTORY_COUNT]
+
+    // Copy current line into history[count-1].
+    sub x10, x10, #1
+    add x11, x9, #OFF_HISTORY
+    add x11, x11, x10, lsl #6
+    mov x12, #0
+3:
+    cmp x12, #(LINE_CAP - 1)
+    b.ge shell_history_push_done
+    ldrb w13, [x20, x12]
+    cbz w13, shell_history_push_done
+    strb w13, [x11, x12]
+    add x12, x12, #1
+    b 3b
+
+shell_history_push_done:
+    // After pushing, cursor sits at the (new) end so further UP presses
+    // pull older entries.
+    add x9, x29, #16
+    ldr x10, [x9, #OFF_HISTORY_COUNT]
+    str x10, [x9, #OFF_HISTORY_CURSOR]
+    ldp x29, x30, [sp], #16
+    ret
+
+// shell_history_up: walk one slot older in the history (cursor--).
+// No-op if already at the oldest entry.
+shell_history_up:
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+    add x9, x29, #16
+    ldr x10, [x9, #OFF_HISTORY_CURSOR]
+    cbz x10, shell_history_up_done
+    sub x10, x10, #1
+    str x10, [x9, #OFF_HISTORY_CURSOR]
+    add x11, x9, #OFF_HISTORY
+    add x0, x11, x10, lsl #6
+    bl shell_history_copy
+shell_history_up_done:
+    ldp x29, x30, [sp], #16
+    ret
+
+// shell_history_down: walk one slot newer in the history (cursor++).
+// When the cursor runs past the newest entry the line is cleared.
+shell_history_down:
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+    add x9, x29, #16
+    ldr x10, [x9, #OFF_HISTORY_CURSOR]
+    ldr x11, [x9, #OFF_HISTORY_COUNT]
+    cmp x10, x11
+    b.ge shell_history_down_done
+    add x10, x10, #1
+    str x10, [x9, #OFF_HISTORY_CURSOR]
+    cmp x10, x11
+    b.ne 1f
+    // Past the newest entry: clear the line.
+    mov w12, #0
+    strb w12, [x20]
+    mov x21, #0
+    b shell_history_down_done
+1:
+    add x11, x9, #OFF_HISTORY
+    add x0, x11, x10, lsl #6
+    bl shell_history_copy
+shell_history_down_done:
+    ldp x29, x30, [sp], #16
     ret
 
 shell_backspace:
@@ -206,6 +362,7 @@ shell_enter:
     mov w1, #0
     strb w1, [x20, x21]
     cbz x21, 9f
+    bl shell_history_push              // capture for UP recall
     mov x0, x20
     bl shell_push_line
     bl shell_dispatch_command
@@ -379,49 +536,142 @@ shell_cmd_ticks:
     ldp x29, x30, [sp], #16
     ret
 
+// shell_cmd_run: parse "run X Y Z" and spawn X with argv = ["X","Y","Z"].
+// The first whitespace-delimited token is the app name; remaining tokens
+// are passed as argv to the spawned process via SYS_SPAWN_ARGV. argv_ptrs
+// point at per-token string buffers in OFF_ARGV_STRS so the kernel has
+// stable memory to copy onto the new stack.
 shell_cmd_run:
-    add x9, x20, #4                 // app name
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+
+    // Skip "run " prefix; x9 points at the first token (the app name).
+    add x9, x20, #4
     ldrb w0, [x9]
-    cbz w0, 9f
+    cbz w0, shell_cmd_run_fail
 
-    mov x10, x24
-    adr x11, shell_kolibri_prefix
-    mov x12, #0
-1:
-    ldrb w0, [x11, x12]
-    cbz w0, 2f
-    strb w0, [x10, x12]
-    add x12, x12, #1
-    b 1b
-2:
-    mov x13, #0
-3:
-    cmp x12, #(DISPLAY_COLS - 1)
-    b.ge 9f
-    ldrb w0, [x9, x13]
-    cbz w0, 4f
+    // Reset argv storage so we can detect overflow.
+    mov x10, #0
+    mov x11, sp
+    add x11, x11, #16 + OFF_ARGV_PTRS
+    mov x12, x11
+shell_run_clear_loop:
+    cmp x10, #ARGV_MAX
+    b.ge shell_run_clear_done
+    str xzr, [x12], #8
+    add x10, x10, #1
+    b shell_run_clear_loop
+shell_run_clear_done:
+    mov x14, #0                      // x14 = argc
+
+    // Build the path "/kolibri/<argv[0]>" in x24.
+    mov x15, x24
+    adr x16, shell_kolibri_prefix
+    mov x17, #0
+shell_run_path_loop:
+    ldrb w0, [x16, x17]
+    cbz w0, shell_run_path_done
+    strb w0, [x15, x17]
+    add x17, x17, #1
+    b shell_run_path_loop
+shell_run_path_done:
+
+    // Tokenise the input starting at x9. x9 scans the input; x10
+    // indexes argv[]; x18 points at the destination token buffer.
+shell_run_tok_outer:
+    ldrb w0, [x9]
+    cbz w0, shell_run_tok_done      // end of input
     cmp w0, #' '
-    b.eq 4f
-    strb w0, [x10, x12]
-    add x12, x12, #1
-    add x13, x13, #1
-    b 3b
-4:
-    mov w0, #0
-    strb w0, [x10, x12]
-    cmp x13, #0
-    b.eq 9f
+    b.ne shell_run_tok_start
+    add x9, x9, #1                  // skip inter-token whitespace
+    b shell_run_tok_outer
 
-    mov x0, x24
-    mov x8, #SYS_SPAWN
+shell_run_tok_start:
+    cmp x14, #ARGV_MAX
+    b.ge shell_run_tok_done          // too many tokens
+
+    // Reserve argv[i] = pointer to token buffer.
+    mov x18, sp
+    add x18, x18, #16 + OFF_ARGV_STRS
+    mov x19, #LINE_CAP
+    mul x19, x19, x14
+    add x18, x18, x19
+
+    mov x11, sp
+    add x11, x11, #16 + OFF_ARGV_PTRS
+    mov x12, #8
+    mul x12, x12, x14
+    add x11, x11, x12
+    str x18, [x11]
+
+    // Copy the token bytes until whitespace or NUL.
+    mov x13, #0
+shell_run_tok_copy:
+    ldrb w0, [x9]
+    cbz w0, shell_run_tok_end
+    cmp w0, #' '
+    b.eq shell_run_tok_end
+    cmp x13, #(LINE_CAP - 1)
+    b.ge shell_run_tok_end
+    strb w0, [x18, x13]
+    add x13, x13, #1
+    add x9, x9, #1
+    b shell_run_tok_copy
+shell_run_tok_end:
+    mov w0, #0
+    strb w0, [x18, x13]
+    cbz x13, shell_run_tok_done       // empty token, ignore
+
+    // If this is the first token, also append it to the path buffer.
+    cmp x14, #0
+    b.ne 1f
+    add x10, x17, #0                 // x10 = current path length
+1:
+    cmp x14, #0
+    b.ne 2f
+    mov x11, #0
+shell_run_path_append:
+    ldrb w0, [x18, x11]
+    cbz w0, 2f
+    cmp x10, #(DISPLAY_COLS - 1)
+    b.ge 2f
+    strb w0, [x15, x10]
+    add x10, x10, #1
+    add x11, x11, #1
+    b shell_run_path_append
+2:
+    add x14, x14, #1                // argc++
+
+    // Skip trailing whitespace before the next token.
+shell_run_tok_skip:
+    ldrb w0, [x9]
+    cbz w0, shell_run_tok_done
+    cmp w0, #' '
+    b.ne shell_run_tok_done
+    add x9, x9, #1
+    b shell_run_tok_skip
+
+shell_run_tok_done:
+    mov w0, #0
+    strb w0, [x15, x10]              // NUL-terminate the path
+    cbz x14, shell_cmd_run_fail       // nothing parsed
+
+    // Build argv pointer (absolute address in caller memory).
+    add x0, sp, #16 + OFF_ARGV_PTRS
+    mov x1, x14
+    mov x2, x24                       // path
+    mov x3, #0                       // entry_index
+    mov x8, #SYS_SPAWN_ARGV
     svc #0
-    tbnz x0, #63, 9f
+    tbnz x0, #63, shell_cmd_run_fail
+
     mov x26, x0
     adr x0, shell_spawned
     bl shell_push_line
     ldp x29, x30, [sp], #16
     ret
-9:
+
+shell_cmd_run_fail:
     adr x0, shell_run_error
     bl shell_push_line
     ldp x29, x30, [sp], #16

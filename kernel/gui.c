@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 #include "kernel/font.h"
+#include "kernel/mm/kheap.h"
 #include "kernel/process.h"
 #include "uart/pl011.h"
 
@@ -266,9 +267,102 @@ int gui_init(gui_desktop_t *desktop, fb_t *fb, uint32_t background_color) {
             desktop->windows[i].title[j] = '\0';
         }
         desktop->windows[i].used = 0;
+        desktop->windows[i].owner_drawn = 0;
+        desktop->windows[i].backing = 0;
+        desktop->windows[i].backing_capacity = 0;
     }
 
     return 0;
+}
+
+/*
+ * backing_fb_for: synthesize an fb_t that points at the window's
+ * backing buffer in content-local coordinates (0,0 = top-left of the
+ * content area below the title bar). Used as a transient destination
+ * by the existing font and fb primitives so app drawing writes into
+ * the backing buffer instead of the live framebuffer.
+ */
+static fb_t backing_fb_for(const gui_window_t *window) {
+    fb_t fb;
+    uint32_t content_h = window->h > window->title_h
+                             ? window->h - window->title_h
+                             : 0U;
+    fb.pixels = window->backing;
+    fb.width = window->w;
+    fb.height = content_h;
+    fb.stride_pixels = window->w;
+    return fb;
+}
+
+/*
+ * gui_window_ensure_backing: lazily allocate the per-window content
+ * backing buffer on the first owner draw. The backing covers only the
+ * content area (excluding the kernel-drawn title bar) and is sized
+ * w * (h - title_h) BGRA pixels. Returns 0 on success, -1 if the
+ * allocator refuses or the window has no owner.
+ */
+int gui_window_ensure_backing(gui_window_t *window) {
+    uint32_t content_h;
+    uint32_t needed_bytes;
+
+    if (window == 0 || window->w == 0 || window->h == 0) {
+        return -1;
+    }
+
+    content_h = window->h > window->title_h
+                    ? window->h - window->title_h
+                    : 0U;
+    if (content_h == 0U) {
+        return -1;
+    }
+
+    needed_bytes = window->w * content_h * sizeof(uint32_t);
+    if (window->backing != 0 && window->backing_capacity >= needed_bytes) {
+        return 0;
+    }
+
+    if (window->backing != 0) {
+        /*
+         * Re-allocation only happens if the new size would exceed
+         * the previous capacity; window size is fixed at creation so
+         * this branch is defensive and should not normally fire.
+         */
+        window->backing = 0;
+        window->backing_capacity = 0;
+    }
+
+    /*
+     * Try the kernel heap first; if that fails, fall back to a static
+     * pool so a single oversized window does not kill the rest of
+     * the desktop. The static pool is small (one window's worth) so
+     * a backing shortage is recoverable.
+     */
+    window->backing = (uint32_t *)kmalloc((unsigned long)needed_bytes);
+    if (window->backing == 0) {
+        return -1;
+    }
+    window->backing_capacity = needed_bytes;
+
+    /*
+     * Initialise the backing to the window's bg_color so the first
+     * blit does not flash through whatever the heap happened to
+     * contain before. Apps that want a transparent background can
+     * overwrite it with their own clear rect.
+     */
+    fb_t fb = backing_fb_for(window);
+    fb_fillrect(&fb, 0, 0, window->w, content_h, window->bg_color);
+
+    return 0;
+}
+
+void gui_window_free_backing(gui_window_t *window) {
+    if (window == 0 || window->backing == 0) {
+        return;
+    }
+    kfree(window->backing);
+    window->backing = 0;
+    window->backing_capacity = 0;
+    window->owner_drawn = 0;
 }
 
 int gui_create_window(gui_desktop_t *desktop, uint32_t x, uint32_t y,
@@ -336,6 +430,7 @@ int gui_destroy_window(gui_desktop_t *desktop, uint32_t window_id) {
         return -1;
     }
     gui_window_t *window = &desktop->windows[window_id];
+    gui_window_free_backing(window);
     window->x = 0;
     window->y = 0;
     window->w = 0;
@@ -417,37 +512,34 @@ int gui_window_draw_text(gui_desktop_t *desktop, uint32_t window_id,
         return -1;
     }
     gui_window_t *window = &desktop->windows[window_id];
-    window->owner_drawn = 1;
     if (text == 0) {
         return -1;
     }
-    /* Clip to window bounds */
-    int32_t clip_x0 = 0, clip_y0 = 0;
-    int32_t clip_x1 = (int32_t)window->w;
-    int32_t clip_y1 = (int32_t)window->h;
-    if (x < clip_x0) {
-        x = clip_x0;
+    if (gui_window_ensure_backing(window) != 0) {
+        return -1;
     }
-    if (y < clip_y0) {
-        y = clip_y0;
-    }
-    if (x >= clip_x1 || y >= clip_y1) {
-        return 0;
-    }
-    /* Owner draws below the kernel title bar so apps keep a clean
-     * 0-based content coordinate space. */
-    uint32_t abs_x = window->x + (uint32_t)x;
-    uint32_t abs_y = window->y + (uint32_t)y + window->title_h;
-    if (abs_x >= desktop->fb->width || abs_y >= desktop->fb->height) {
-        return 0;
-    }
-    /* font_draw_text doesn't clip; we have to draw into the fb manually
-     * by leveraging the existing font primitive. We save/restore the fb
-     * and let the global fb be the destination.
+    window->owner_drawn = 1;
+    /*
+     * Content coordinates are 0-based; the backing buffer origin sits
+     * at (0,0) of the content area so we draw at (x, y) directly.
+     * The compositor adds title_h when blitting the backing onto the
+     * framebuffer.
      */
-    (void)clip_x1;
-    (void)clip_y1;
-    font_draw_text(desktop->fb, abs_x, abs_y, text, color);
+    uint32_t content_h = window->h > window->title_h
+                             ? window->h - window->title_h
+                             : 0U;
+    if (x < 0) {
+        x = 0;
+    }
+    if (y < 0) {
+        y = 0;
+    }
+    if ((uint32_t)x >= window->w || (uint32_t)y >= content_h) {
+        return 0;
+    }
+    fb_t fb = backing_fb_for(window);
+    font_draw_text(&fb, (uint32_t)x, (uint32_t)y, text, color);
+    gui_request_redraw();
     return 0;
 }
 
@@ -459,35 +551,41 @@ int gui_window_draw_rect(gui_desktop_t *desktop, uint32_t window_id,
         return -1;
     }
     gui_window_t *window = &desktop->windows[window_id];
-    window->owner_drawn = 1;
     if (w == 0 || h == 0) {
         return 0;
     }
-    int32_t wx0 = (int32_t)window->x;
-    int32_t wy0 = (int32_t)window->y;
-    int32_t wx1 = wx0 + (int32_t)window->w;
-    int32_t wy1 = wy0 + (int32_t)window->h;
-    int32_t x0 = wx0 + x;
-    int32_t y0 = wy0 + y + (int32_t)window->title_h;
+    if (gui_window_ensure_backing(window) != 0) {
+        return -1;
+    }
+    window->owner_drawn = 1;
+    uint32_t content_h = window->h > window->title_h
+                             ? window->h - window->title_h
+                             : 0U;
+    int32_t x0 = x;
+    int32_t y0 = y;
     int32_t x1 = x0 + (int32_t)w;
     int32_t y1 = y0 + (int32_t)h;
-    if (x0 < wx0) {
-        x0 = wx0;
+    int32_t cx1 = (int32_t)window->w;
+    int32_t cy1 = (int32_t)content_h;
+    if (x0 < 0) {
+        x0 = 0;
     }
-    if (y0 < wy0) {
-        y0 = wy0;
+    if (y0 < 0) {
+        y0 = 0;
     }
-    if (x1 > wx1) {
-        x1 = wx1;
+    if (x1 > cx1) {
+        x1 = cx1;
     }
-    if (y1 > wy1) {
-        y1 = wy1;
+    if (y1 > cy1) {
+        y1 = cy1;
     }
     if (x1 <= x0 || y1 <= y0) {
         return 0;
     }
-    fb_fillrect(desktop->fb, (uint32_t)x0, (uint32_t)y0,
+    fb_t fb = backing_fb_for(window);
+    fb_fillrect(&fb, (uint32_t)x0, (uint32_t)y0,
                 (uint32_t)(x1 - x0), (uint32_t)(y1 - y0), color);
+    gui_request_redraw();
     return 0;
 }
 
@@ -498,8 +596,16 @@ int gui_window_clear(gui_desktop_t *desktop, uint32_t window_id,
         return -1;
     }
     gui_window_t *window = &desktop->windows[window_id];
-    fb_fillrect(desktop->fb, window->x + 1U, window->y + 1U,
-                window->w - 2U, window->h - 2U, color);
+    if (gui_window_ensure_backing(window) != 0) {
+        return -1;
+    }
+    window->owner_drawn = 1;
+    uint32_t content_h = window->h > window->title_h
+                             ? window->h - window->title_h
+                             : 0U;
+    fb_t fb = backing_fb_for(window);
+    fb_fillrect(&fb, 0, 0, window->w, content_h, color);
+    gui_request_redraw();
     return 0;
 }
 
@@ -767,8 +873,27 @@ static void gui_draw_window(fb_t *fb, const gui_desktop_t *desktop,
                         window->w - 2U, window->h - 2U, window->bg_color);
         }
     } else {
-        /* Owner has drawn content; only paint the 1px border so we don't
-         * overwrite its work. */
+        /*
+         * Owner-drawn path: blit the backing buffer first (it is the
+         * source of truth for the window's content), then paint the
+         * 1px border on top so the border survives regardless of what
+         * the owner drew into (0, 0). This is what makes drag / focus
+         * changes / resize look correct: the content follows the
+         * window because we always re-blit at the current (x, y).
+         */
+        if (window->backing != 0) {
+            uint32_t content_h = window->h > window->title_h
+                                     ? window->h - window->title_h
+                                     : 0U;
+            uint32_t blit_y = window->y + window->title_h;
+            uint32_t blit_h = content_h;
+            if (window->title_h == 0U) {
+                blit_y = window->y;
+                blit_h = window->h;
+            }
+            fb_blit(fb, window->x, blit_y, window->backing,
+                     window->w, blit_h);
+        }
         fb_fillrect(fb, window->x, window->y, window->w, 1U, border);
         if (window->h > 1U) {
             fb_fillrect(fb, window->x,
@@ -797,13 +922,15 @@ static void gui_draw_window(fb_t *fb, const gui_desktop_t *desktop,
             fb_fillrect(fb, window->x, window->y + window->title_h,
                         window->w, 1U, border);
         }
-        /* Center the 7 px tall font vertically inside the bar with 2 px
-         * left padding for the text. */
-        uint32_t text_y = window->y + (window->title_h > 7U
-                                       ? (window->title_h - 7U) / 2U
+        /* Center the font glyph vertically inside the bar with 2 px left
+         * padding for the text. Clip to the bar height so the glyph never
+         * bleeds into the content area. */
+        uint32_t text_y = window->y + (window->title_h > FONT_GLYPH_HEIGHT
+                                       ? (window->title_h - FONT_GLYPH_HEIGHT) /
+                                             2U
                                        : 0U);
-        font_draw_text(fb, window->x + 2U, text_y, window->title,
-                       0xfff0f4f8U);
+        font_draw_text_clipped(fb, window->x + 2U, text_y, window->title_h,
+                               window->title, 0xfff0f4f8U);
         /* Close button: small red box with an X inside, flush right.
          * Only drawn when gui_close_box_rect accepts the geometry. The
          * click path in gui_handle_input mirrors this helper, so a

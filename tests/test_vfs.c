@@ -655,3 +655,31 @@ void test_vfs_open_write_fd_updates_offset_and_size(void) {
     TEST_ASSERT_EQUAL_UINT64(4, output[3]);
     TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)vfs_close(fd));
 }
+
+/*
+ * vfs_unlink / vfs_rename reject anything that is not under
+ * "/fat/". The full filesystem round-trip is covered by the FAT32
+ * tests; these cases just lock down the path-validation contract so
+ * tmpfs / bootfs callers don't accidentally try to delete an
+ * immutable path.
+ */
+void test_vfs_unlink_rejects_non_fat_paths(void) {
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1, (uint64_t)vfs_unlink("/"));
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1, (uint64_t)vfs_unlink("/tmp/note"));
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
+                             (uint64_t)vfs_unlink("/fat/"));
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
+                             (uint64_t)vfs_unlink("/kolibri/hello"));
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1, (uint64_t)vfs_unlink(0));
+}
+
+void test_vfs_rename_rejects_non_fat_paths(void) {
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
+                             (uint64_t)vfs_rename("/tmp/a", "/tmp/b"));
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
+                             (uint64_t)vfs_rename("/fat/a", "/tmp/b"));
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
+                             (uint64_t)vfs_rename("/tmp/a", "/fat/b"));
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1, (uint64_t)vfs_rename(0, "/fat/b"));
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1, (uint64_t)vfs_rename("/fat/a", 0));
+}

@@ -29,11 +29,14 @@
 .equ TITLE_BAR_H,    12
 .equ FILE_CAP,       512
 .equ RENDER_CAP,     128
-.equ EVENT_CAP,      8
+.equ EVENT_CAP,       8
 .equ OFF_FILE,       0
 .equ OFF_RENDER,     512
 .equ OFF_EVENTS,     640
-.equ FRAME_BYTES,    768
+.equ OFF_ARGC,       768
+.equ OFF_ARGV,       776
+.equ OFF_PATH,       784    // 16-byte path buffer for argv[1] override
+.equ FRAME_BYTES,    800
 
 .section .user.image.header, "a"
 .global editor_image_header
@@ -66,9 +69,18 @@ editor_start:
     add x23, sp, #OFF_EVENTS         // x23 = event buffer
     mov x21, #0                      // x21 = file length
 
+    // Persist argv on the stack so callees (which can trash x0-x7)
+    // can still redraw it. The shell sets these when launching
+    // `run editor <file>`; the kernel places x0=argc, x1=argv at
+    // first EL0 entry.
+    add x28, sp, #OFF_ARGC
+    str x0, [x28]                    // argc
+    str x1, [x28, #8]                // argv pointer
+
     mov x0, #1
     adr x1, editor_banner
     bl common_write_cstr
+    bl editor_print_argv             // show what the shell passed
 
     bl editor_load_note
     bl editor_create_window
@@ -131,12 +143,66 @@ editor_fail:
     mov x8, #SYS_EXIT
     svc #0
 
-// editor_load_note: best-effort load of /tmp/note into x20, length in x21.
+// editor_resolve_path: pick the file path the editor should read/write.
+// If argv[1] exists, use it (the shell passed a path). Otherwise fall
+// back to the default /tmp/note (the legacy behaviour). Returns the
+// resolved path pointer in x0; the buffer lives in OFF_PATH.
+editor_resolve_path:
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+
+    add x28, x29, #16
+    ldr x0, [x28, #OFF_ARGC]
+    cmp x0, #2
+    b.lt editor_resolve_default
+
+    ldr x1, [x28, #OFF_ARGV]
+    ldr x2, [x1, #8]                 // x2 = argv[1]
+    cbz x2, editor_resolve_default
+
+    // Copy argv[1] (up to 15 chars + NUL) into OFF_PATH.
+    add x3, x29, #16
+    add x3, x3, #OFF_PATH
+    mov x4, #0
+1:
+    cmp x4, #15
+    b.ge 2f
+    ldrb w0, [x2, x4]
+    cbz w0, 2f
+    strb w0, [x3, x4]
+    add x4, x4, #1
+    b 1b
+2:
+    mov w0, #0
+    strb w0, [x3, x4]
+
+    add x0, x29, #16
+    add x0, x0, #OFF_PATH
+    ldp x29, x30, [sp], #16
+    ret
+
+editor_resolve_default:
+    add x0, x29, #16
+    add x0, x0, #OFF_PATH
+    adr x1, editor_default_path
+    mov x2, #0
+3:
+    ldrb w3, [x1, x2]
+    strb w3, [x0, x2]
+    add x2, x2, #1
+    cbnz w3, 3b
+    ldp x29, x30, [sp], #16
+    ret
+
+// editor_load_note: best-effort load of the resolved path into x20.
 editor_load_note:
     stp x29, x30, [sp, #-16]!
     mov x29, sp
 
-    adr x0, editor_path
+    bl editor_resolve_path
+    mov x26, x0                     // x26 = resolved path
+
+    mov x0, x26
     mov x1, #O_RDONLY
     mov x8, #SYS_OPEN
     svc #0
@@ -216,6 +282,16 @@ editor_redraw:
     mov x8, #SYS_WINDOW_DRAW_TEXT
     svc #0
 
+    // If the shell passed args, draw "ARGV: a b c" on a second line so
+    // the Phase 10.4 exit criterion ("shell correctly passes args to
+    // spawned apps") is visible without needing a debugger.
+    add x28, x29, #16
+    ldr x0, [x28, #OFF_ARGC]
+    cmp x0, #1
+    b.le 1f
+    bl editor_render_argv_line
+1:
+
     bl editor_build_render
 
     mov x0, x19
@@ -231,6 +307,127 @@ editor_redraw:
     mov x8, #SYS_WINDOW_REDRAW
     svc #0
 
+    ldp x29, x30, [sp], #16
+    ret
+
+// editor_render_argv_line: walk the argv[] the shell passed and emit
+// "ARGV: <tok0> <tok1> ..." into the render buffer at x22, then draw
+// it under the status line. argv is reloaded from the frame before
+// each window draw because SVC may trash x0-x7.
+editor_render_argv_line:
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+
+    // Rebuild the render buffer from scratch with "ARGV: ..." prefix.
+    mov x19, #0
+1:
+    cmp x19, #RENDER_CAP
+    b.ge 2f
+    strb wzr, [x22, x19]
+    add x19, x19, #1
+    b 1b
+2:
+    mov x20, #0                      // x20 = render index
+    adr x21, editor_argv_prefix
+    mov x27, #0
+3:
+    ldrb w0, [x21, x27]
+    cbz w0, 4f
+    cmp x20, #(RENDER_CAP - 1)
+    b.ge 4f
+    strb w0, [x22, x20]
+    add x20, x20, #1
+    add x27, x27, #1
+    b 3b
+
+4:
+    add x28, x29, #16
+    ldr x23, [x28, #OFF_ARGC]       // x23 = argc
+    ldr x24, [x28, #OFF_ARGV]       // x24 = argv
+    mov x25, #0                      // x25 = i
+
+5:
+    cmp x25, x23
+    b.ge 9f
+
+    cmp x20, #(RENDER_CAP - 1)
+    b.ge 9f
+    mov w0, #' '
+    strb w0, [x22, x20]
+    add x20, x20, #1
+
+    ldr x26, [x24, x25, lsl #3]     // x26 = argv[i] string pointer
+    mov x27, #0
+6:
+    ldrb w0, [x26, x27]
+    cbz w0, 7f
+    cmp x20, #(RENDER_CAP - 1)
+    b.ge 7f
+    strb w0, [x22, x20]
+    add x20, x20, #1
+    add x27, x27, #1
+    b 6b
+7:
+    add x25, x25, #1
+    b 5b
+
+9:
+    mov w0, #0
+    strb w0, [x22, x20]
+
+    mov x0, x19
+    mov x1, #12
+    mov x2, #22
+    movz x3, #0xffc0, lsl #16
+    movk x3, #0xd0e0
+    mov x4, x22
+    mov x8, #SYS_WINDOW_DRAW_TEXT
+    svc #0
+
+    ldp x29, x30, [sp], #16
+    ret
+
+// editor_print_argv: dump the argv the shell passed to stdout so the
+// Phase 10.4 "shell correctly passes args to spawned apps" criterion
+// is visible in the k> serial console even without a window. argc
+// and argv are reloaded from the frame after every syscall because
+// the SVC return path may clobber x0-x7.
+editor_print_argv:
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+
+    add x28, x29, #16
+    ldr x0, [x28, #OFF_ARGC]
+    cmp x0, #0
+    b.le 9f
+
+    mov x0, #1
+    adr x1, editor_argv_banner
+    bl common_write_cstr
+
+    add x28, x29, #16
+    ldr x19, [x28, #OFF_ARGC]       // x19 = argc (callee-saved)
+    ldr x20, [x28, #OFF_ARGV]       // x20 = argv
+    mov x21, #0                      // x21 = i
+
+1:
+    cmp x21, x19
+    b.ge 9f
+
+    cmp x21, #0
+    b.eq 2f
+    mov x0, #1
+    adr x1, editor_argv_sep
+    bl common_write_cstr
+2:
+    ldr x22, [x20, x21, lsl #3]
+    mov x0, #1
+    mov x1, x22
+    bl common_write_cstr
+    add x21, x21, #1
+    b 1b
+
+9:
     ldp x29, x30, [sp], #16
     ret
 
@@ -308,7 +505,8 @@ editor_save_note:
     stp x29, x30, [sp, #-16]!
     mov x29, sp
 
-    adr x0, editor_path
+    bl editor_resolve_path
+    mov x0, x0
     mov x1, #O_RDWR
     mov x8, #SYS_OPEN
     svc #0
@@ -345,6 +543,12 @@ editor_fail_msg:
     .ascii "editor: window create failed\n\0"
 editor_status:
     .ascii "CTRL S SAVE CTRL Q CLOSE\0"
-editor_path:
+editor_argv_prefix:
+    .ascii "ARGV: \0"
+editor_argv_banner:
+    .ascii "editor: argv=\0"
+editor_argv_sep:
+    .ascii " \0"
+editor_default_path:
     .asciz "/tmp/note"
 editor_image_end:

@@ -34,6 +34,7 @@ return `ERR_INVAL`.
 | 4 | `sys_spawn` | `x0=path_ptr, x1=entry_index` | PID / error | Spawn a flat image entry from VFS |
 | 6 | `sys_wait` | `x0=pid` | exit code / error | Reclaim an exited process |
 | 7 | `sys_kill` | `x0=pid` | 0 / error | Terminate another process |
+| 8 | `sys_spawn_argv` | `x0=path, x1=entry_index, x2=argv_ptr, x3=argc` | PID / error | Spawn a flat image and pass argv to it |
 
 Notes:
 - `sys_exit` marks the process as exited and switches to the next runnable EL0
@@ -42,6 +43,13 @@ Notes:
 - `sys_spawn` is the first loader hook exposed to EL0. It currently loads a
   flat image through VFS, starts the selected entry as a READY process, and
   reclaims exited demo processes before allocating a slot.
+- `sys_spawn_argv` extends `sys_spawn` with an argv vector. `argv_ptr` must
+  point at `argc` `uint64_t` entries inside the caller's registered user
+  regions. The kernel copies each referenced string onto the new process's
+  stack, sets `x0 = argc` and `x1 = &argv[0]` in the new process's initial
+  frame, and points the initial `sp` at `argv[0]`. The strings and argv array
+  survive even after the caller returns because they live in the spawned
+  process's own stack memory. Cap: 8 strings, 256 bytes total payload.
 - `sys_wait` is non-blocking today: it succeeds only when the target process is
   already `ZOMBIE`; otherwise it returns `ERR_AGAIN`.
 - `sys_kill` marks another process exited with code `0x80`. It currently
@@ -84,6 +92,8 @@ Current limitations:
 | 44 | `sys_seek` | `x0=fd, x1=offset, x2=whence` | new offset / error | Seek within a VFS file |
 | 45 | `sys_stat` | `x0=path, x1=stat_ptr` | 0 / error | Get VFS file metadata |
 | 46 | `sys_readdir` | `x0=path, x1=buf, x2=len` | bytes written / error | List mounted VFS paths or supported VFS directories |
+| 47 | `sys_unlink` | `x0=path_ptr` | 0 / error | Remove a file from the underlying filesystem |
+| 48 | `sys_rename` | `x0=old_ptr, x1=new_ptr` | 0 / error | Rename a file in the same directory |
 
 Current file descriptors:
 ```
@@ -105,6 +115,11 @@ Notes:
 - `sys_readdir("/")` writes newline-separated mounted VFS paths. When FAT32 is
   present, `sys_readdir("/fat")` writes newline-separated root 8.3 directory
   entries.
+- `sys_unlink` and `sys_rename` route through `vfs_unlink` / `vfs_rename`.
+  Only paths under the FAT32 root mounted at `/fat/` are accepted today;
+  the caller's pointers must point to null-terminated user strings inside
+  registered user regions. `sys_rename` rejects any destination that
+  already exists in the same directory.
 - `sys_write` returns `ERR_BADF` for unsupported descriptors or descriptors
   not opened for writing.
 - `sys_write` validates that `buf..buf+len` is inside the current process's
@@ -228,7 +243,6 @@ yet unless also listed in "Implemented Now".
 | # | Name | Args | Returns | Description |
 |---|------|------|---------|-------------|
 | 5 | `sys_exec` | `x0=path_ptr, x1=argv_ptr` | — | Replace process image |
-| 8 | `sys_sleep` | `x0=ms` | 0 / error | Sleep for N milliseconds |
 | 9 | `sys_fork` | — | PID / 0 | Clone current process |
 
 ### Planned Memory
@@ -241,9 +255,7 @@ yet unless also listed in "Implemented Now".
 
 | # | Name | Args | Returns | Description |
 |---|------|------|---------|-------------|
-| 47 | `sys_mkdir` | `x0=path` | 0 / error | Create directory |
-| 48 | `sys_unlink` | `x0=path` | 0 / error | Delete file |
-| 49 | `sys_rename` | `x0=old, x1=new` | 0 / error | Rename/move file |
+| 49 | `sys_mkdir` | `x0=path` | 0 / error | Create directory |
 
 Planned standard file descriptors:
 ```

@@ -16,6 +16,12 @@ extern char __app_editor_start[];
 extern char __app_editor_end[];
 extern char __app_monitor_start[];
 extern char __app_monitor_end[];
+extern char __app_win_start[];
+extern char __app_win_end[];
+extern char __app_panel_start[];
+extern char __app_panel_end[];
+extern char __app_clock_start[];
+extern char __app_clock_end[];
 
 void test_bootfs_find_existing_file_metadata(void) {
     const bootfs_file_t *file = bootfs_find("hello");
@@ -33,6 +39,51 @@ void test_bootfs_find_returns_each_registered_app(void) {
     TEST_ASSERT_NOT_NULL(bootfs_find("loop"));
     TEST_ASSERT_NOT_NULL(bootfs_find("fault"));
     TEST_ASSERT_NOT_NULL(bootfs_find("shell"));
+}
+
+void test_bootfs_finds_editor_and_panel_for_taskbar_spawn(void) {
+    /*
+     * The panel's editor button click resolves the editor through this
+     * path: bootfs_find("editor") -> bootfs_read -> user_image_load.
+     * If either lookup fails, sys_spawn returns -ENOENT and the panel
+     * silently does nothing on click. The bootfs_find result feeds the
+     * user_image loader directly, so we also assert the editor's
+     * bootfs data pointer matches the linked-in assembly blob.
+     *
+     * bootfs_find returns a pointer into a file-scope static buffer
+     * (g_found_file), so every call overwrites the previous result.
+     * Snapshot each lookup's fields into locals before doing the next
+     * call, otherwise the editor assertions see the panel data.
+     */
+    const bootfs_file_t *editor_file;
+    const uint8_t *editor_data;
+    uint64_t editor_size;
+    const bootfs_file_t *panel_file;
+
+    editor_file = bootfs_find("editor");
+    TEST_ASSERT_NOT_NULL(editor_file);
+    editor_data = editor_file->data;
+    editor_size = editor_file->size;
+
+    TEST_ASSERT_EQUAL_UINT64(
+        (uint64_t)((uintptr_t)__app_editor_end - (uintptr_t)__app_editor_start),
+        editor_size);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(uintptr_t)__app_editor_start,
+                             (uint64_t)(uintptr_t)editor_data);
+
+    panel_file = bootfs_find("panel");
+    TEST_ASSERT_NOT_NULL(panel_file);
+    TEST_ASSERT_EQUAL_UINT64(
+        (uint64_t)((uintptr_t)__app_panel_end - (uintptr_t)__app_panel_start),
+        panel_file->size);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(uintptr_t)__app_panel_start,
+                             (uint64_t)(uintptr_t)panel_file->data);
+}
+
+void test_bootfs_finds_monitor_win_and_clock(void) {
+    TEST_ASSERT_NOT_NULL(bootfs_find("monitor"));
+    TEST_ASSERT_NOT_NULL(bootfs_find("win"));
+    TEST_ASSERT_NOT_NULL(bootfs_find("clock"));
 }
 
 void test_bootfs_find_rejects_missing_and_invalid_names(void) {
@@ -129,6 +180,66 @@ void test_bootfs_mount_vfs_exposes_kolibri_paths(void) {
     TEST_ASSERT_EQUAL_UINT64((uint64_t)((uintptr_t)__app_shell_end -
                                         (uintptr_t)__app_shell_start),
                              shell_node->size);
+}
+
+void test_bootfs_mount_vfs_exposes_editor_and_panel_paths(void) {
+    const vfs_node_t *editor_node;
+    const vfs_node_t *panel_node;
+
+    /*
+     * The panel click handler builds "/kolibri/editor" and passes it to
+     * sys_spawn. The lookup vfs_find("/kolibri/editor") is the same
+     * path the spawn code uses, so if this assertion ever fails the
+     * editor button is broken even though boot_program_find("editor")
+     * may still succeed in isolation.
+     */
+    vfs_reset();
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)bootfs_mount_vfs());
+
+    editor_node = vfs_find("/kolibri/editor");
+    TEST_ASSERT_NOT_NULL(editor_node);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)((uintptr_t)__app_editor_end -
+                                        (uintptr_t)__app_editor_start),
+                             editor_node->size);
+
+    panel_node = vfs_find("/kolibri/panel");
+    TEST_ASSERT_NOT_NULL(panel_node);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)((uintptr_t)__app_panel_end -
+                                        (uintptr_t)__app_panel_start),
+                             panel_node->size);
+}
+
+void test_bootfs_mount_vfs_exposes_remaining_app_paths(void) {
+    vfs_reset();
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)bootfs_mount_vfs());
+
+    TEST_ASSERT_NOT_NULL(vfs_find("/kolibri/monitor"));
+    TEST_ASSERT_NOT_NULL(vfs_find("/kolibri/win"));
+    TEST_ASSERT_NOT_NULL(vfs_find("/kolibri/clock"));
+}
+
+void test_bootfs_mount_vfs_reads_editor_through_vfs(void) {
+    uint8_t buffer[4] = { 0 };
+    uint64_t bytes_read = 0;
+
+    /*
+     * Mirrors what user_image_load_bootfs_flat does internally: open
+     * /kolibri/editor, read the first few bytes, and confirm the flat
+     * header magic 0x31494c4b ('KLI1') is the first uint32_t. Without
+     * this, a typo in bootfs.c or a path mismatch would silently
+     * corrupt the editor launcher.
+     */
+    vfs_reset();
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)bootfs_mount_vfs());
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)vfs_read("/kolibri/editor", 0, buffer,
+                                                sizeof(buffer), &bytes_read));
+    TEST_ASSERT_EQUAL_UINT64(sizeof(buffer), bytes_read);
+
+    uint32_t magic = (uint32_t)buffer[0] | ((uint32_t)buffer[1] << 8) |
+                     ((uint32_t)buffer[2] << 16) |
+                     ((uint32_t)buffer[3] << 24);
+    TEST_ASSERT_EQUAL_UINT64(0x31494c4bU, magic);
 }
 
 void test_bootfs_mount_vfs_reads_app_through_vfs(void) {

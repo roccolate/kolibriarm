@@ -50,7 +50,8 @@ assembly syscalls with a tiny userland library later.
 - tmpfs (in-RAM) with create/read/write/delete
 - Fixed VFS, bootfs seed, named program registry, `/kolibri/<name>` app paths
 - Fixed-message IPC `sys_ipc_send` / `sys_ipc_recv`
-- Bitmap 5x7 font, scalar 2D primitives, alpha blending, clipping
+- Bitmap 8x8 font (ported from KolibriOS `8X8ISXP`), scalar 2D primitives,
+  alpha blending, clipping
 - Kernel-owned GUI compositor with per-process windows, cursor, focus, drag,
   title bars, and title-bar close events
 - Panel taskbar app booted automatically as the first EL0 process
@@ -182,7 +183,13 @@ Exit criteria:
 - [ ] All four apps run together without crashing.
 - [ ] Editing in `editor` is visible only inside the editor window.
 - [x] `shell` can spawn any registered app by name with `run <name>`.
-- [ ] `shell` correctly passes args to spawned apps.
+- [x] `shell` correctly passes args to spawned apps. `SYS_SPAWN_ARGV` (syscall
+      8) accepts `argv_ptr` and `argc`; the kernel copies each referenced
+      string onto the new process's stack and presents the spawned process
+      with `x0 = argc` and `x1 = &argv[0]` per the AArch64 procedure-call
+      ABI. The shell splits `run X Y Z` on whitespace and forwards the
+      resulting tokens; the editor prints the received argv to stdout and
+      paints an `ARGV:` line so the path is visible without a debugger.
 
 ### Phase 10.5 — Polish and KolibriOS ports
 
@@ -204,7 +211,15 @@ Exit criteria:
       bar/close box, arrow elsewhere).
 - [x] Cursor changes shape over taskbar launcher buttons through
       `sys_cursor_set_shape(0=arrow, 1=hand)`.
-- [ ] Building from a KolibriOS `.kos` demo file works for at least hello.
+- [x] Building from a KolibriOS `.kos` demo file works for at least hello.
+      `programs/apps/kos_hello.S` is the smallest KOS demo and the kernel
+      recognises `USER_KOS_MAGIC` (`0x00534F4B`) alongside the native
+      `USER_IMAGE_MAGIC` (`0x31494c4b`) in `user_image_load_flat`.
+- [x] Sticky key handling for the shell (`up` arrow recalls the previous
+      line). The kernel's input parser turns ANSI `ESC [ A/B/C/D` into
+      `INPUT_KEY_UP/DOWN/LEFT/RIGHT` events (`drivers/input/input.c`);
+      the shell keeps a depth-8 command history ring and lets the user
+      walk back through it with Up/Down.
 
 ---
 
@@ -213,21 +228,28 @@ Exit criteria:
 The roadmap does not commit to anything beyond Phase 10.5 yet. The next set of
 candidates, in rough order of return on effort:
 
-- **Per-window backing buffers or damage tracking (deferred).** Today's
-  compositor repaints the full desktop on every dirty tick, which is
-  visually fine for move/drag and for apps that repaint their whole
-  content area (shell, clock, editor, and monitor do this now; future windowed
-  apps must do the same until the rule changes). It
-  becomes fragile only when an app relies on partial updates that
-  overlap with another window's redraw between ticks. Implement the
-  first concrete case of that breakage before designing the
-  abstraction: choose between per-window `uint32_t *backing[w*h]`
-  (expensive; one full-window allocation per window from kheap) or
-  damage-rectangle tracking (cheap; partial draws can still be
-  clobbered by interleaved compositor passes). Until a real partial
-  update bug appears, the alpha rule is: apps repaint their entire
-  content area on every change.
-- Real FAT32 write (cluster allocation, file create/delete, rename, LFN).
+- **Per-window backing buffers (done).** Every owner-drawn window
+  owns a per-window BGRA buffer that the kernel blits onto the
+  framebuffer during `gui_draw`. App draws (`SYS_WINDOW_DRAW_RECT`
+  and `SYS_WINDOW_DRAW_TEXT`) land in the backing instead of the
+  live framebuffer, so drags and focus changes carry the content
+  with the window. The first concrete partial-update bug — the
+  previous compositor leaving the app's content stranded at the
+  window's old framebuffer position after a drag — is gone.
+  Damage-rectangle tracking is still possible later as a
+  smaller-footprint alternative once a single huge backing proves
+  too costly.
+- **USB HID foundations (done).** `drivers/pci/` walks the ECAM at
+  0xF0000000 and decodes BARs; `drivers/usb/hid.{c,h}` parses boot
+  reports (8-byte keyboard, 3-byte mouse); `drivers/usb/usb_core.{c,h}`
+  walks configuration descriptors and exposes standard requests;
+  `drivers/usb/uhci.{c,h}` defines the registers and a static
+  frame list / TD pool. The boot-protocol translator
+  (`usb_hid_keyboard_report`, `usb_hid_mouse_report`) converts
+  reports into `input_event_t` and feeds the same `input_queue` the
+  UART and virtio-input use. Unit tests cover descriptors, parser,
+  and translator; live enumeration still needs a working
+  `uhci_control_transfer` (the next step).
 - USB HID keyboard and mouse drivers, so the QEMU UART input is no longer the
   primary path.
 - SMP: enable the secondary cores after the uniprocessor desktop is stable.

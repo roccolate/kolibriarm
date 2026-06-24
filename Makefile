@@ -12,8 +12,8 @@ BOARD ?= qemu_virt
 BOARD_DIR := drivers/boards/$(BOARD)
 KERNEL_ELF := $(BUILD_DIR)/kernel.elf
 KERNEL_BIN := $(BUILD_DIR)/kernel.bin
-KERNEL_SIZE_LIMIT ?= 71000
-APPS := hello loop fault shell editor monitor win panel clock
+KERNEL_SIZE_LIMIT ?= 80000
+APPS := hello loop fault shell editor monitor win panel clock kos_hello
 APPS_DIR := programs/apps
 APPS_COMMON_OBJ := $(BUILD_DIR)/$(APPS_DIR)/common.o
 APP_OBJS := $(addprefix $(BUILD_DIR)/$(APPS_DIR)/,$(addsuffix .o,$(APPS)))
@@ -83,7 +83,12 @@ OBJS := \
     $(APP_BLOBS) \
     $(BUILD_DIR)/drivers/uart/pl011.o \
     $(BUILD_DIR)/drivers/input/input.o \
-    $(BUILD_DIR)/drivers/input/virtio_input.o
+    $(BUILD_DIR)/drivers/input/virtio_input.o \
+    $(BUILD_DIR)/drivers/pci/pci.o \
+    $(BUILD_DIR)/drivers/usb/hid.o \
+    $(BUILD_DIR)/drivers/usb/uhci.o \
+    $(BUILD_DIR)/drivers/usb/usb_core.o \
+    $(BUILD_DIR)/drivers/usb/hid_driver.o
 
 DEPS := $(OBJS:.o=.d)
 

@@ -74,7 +74,10 @@ The current milestone is **Phase 10 — a real desktop**. Read
       clicking icons.
 - [x] Ship four real apps: `shell`, `editor`, `monitor`, `clock`
       as windowed desktop apps.
-- [ ] Port KolibriOS's 8x8 font and (eventually) the `KOS` flat format.
+- [x] Port KolibriOS's 8x8 font (`8X8ISXP`-shaped, ASCII 32-126).
+- [x] Accept the `KOS` flat format (header magic `0x00534F4B`) as a synonym
+      for our native `KLI1` header, with `programs/apps/kos_hello.S` as the
+      smallest cross-compatible demo.
 
 Out of scope until the desktop is real:
 - SMP, USB HID, full FAT32 write, real HTTP client.
@@ -134,10 +137,12 @@ make qemu
 # ticks
 # mem
 # run editor
+# run editor myfile.txt    # passes myfile.txt as argv[1] to the editor
 # run monitor
 # run clock
 # run hello
 # run loop
+# run kos_hello            # uses the KolibriOS-style KOS flat header
 # kill last
 # exit
 

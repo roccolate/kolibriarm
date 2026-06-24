@@ -226,6 +226,103 @@ void test_user_image_load_flat_rejects_invalid_headers(void) {
                                  0));
 }
 
+void test_user_image_load_flat_accepts_kos_header(void) {
+    struct {
+        user_kos_image_header_t header;
+        uint8_t code[16];
+    } source;
+    uint8_t loaded[sizeof(source)] = { 0 };
+    user_image_t image;
+
+    /*
+     * Build a minimal KOS image: 24-byte header + 16 bytes of code,
+     * with the entry point at code[4] so the loader sees something
+     * different from "the very first byte of the code section".
+     */
+    source.header.magic = USER_KOS_MAGIC;
+    source.header.image_size = sizeof(source);
+    source.header.mem_size = 0;          /* 0 means image_size */
+    source.header.stack_size = 0;       /* 0 means default */
+    source.header.entry_offset = sizeof(source.header) + 4;
+    source.header.reserved = 0;
+    for (uint32_t i = 0; i < sizeof(source.code); i++) {
+        source.code[i] = (uint8_t)(0xc0U + i);
+    }
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)user_image_load_flat(
+                                 &image, "kos", (uint64_t)(uintptr_t)loaded,
+                                 sizeof(loaded),
+                                 (uint64_t)(uintptr_t)&source, sizeof(source),
+                                 0));
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(uintptr_t)loaded, image.base);
+    TEST_ASSERT_EQUAL_UINT64(sizeof(source), image.size);
+    TEST_ASSERT_EQUAL_UINT64(sizeof(source.header) + 4, image.entry_offset);
+
+    /* The full image (header + code) is copied verbatim. */
+    for (uint32_t i = 0; i < sizeof(source); i++) {
+        const uint8_t *bytes = (const uint8_t *)(const void *)&source;
+        TEST_ASSERT_EQUAL_UINT64(bytes[i], loaded[i]);
+    }
+}
+
+void test_user_image_load_flat_kos_rejects_bad_inputs(void) {
+    user_kos_image_header_t source;
+    uint8_t loaded[128] = { 0 };
+    user_image_t image;
+
+    /* Wrong magic stays rejected under the KOS path too. */
+    source.magic = USER_IMAGE_MAGIC;
+    source.image_size = sizeof(source);
+    source.entry_offset = sizeof(source);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
+                             (uint64_t)user_image_load_flat(
+                                 &image, "kos-bad-magic",
+                                 (uint64_t)(uintptr_t)loaded, sizeof(loaded),
+                                 (uint64_t)(uintptr_t)&source, sizeof(source),
+                                 0));
+
+    /* Entry outside the image is rejected. */
+    source.magic = USER_KOS_MAGIC;
+    source.image_size = sizeof(source);
+    source.entry_offset = sizeof(source); /* == image_size, out of range */
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
+                             (uint64_t)user_image_load_flat(
+                                 &image, "kos-bad-entry",
+                                 (uint64_t)(uintptr_t)loaded, sizeof(loaded),
+                                 (uint64_t)(uintptr_t)&source, sizeof(source),
+                                 0));
+
+    /* Entry index other than 0 is rejected (KOS has a single entry). */
+    source.entry_offset = sizeof(source) / 2;
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
+                             (uint64_t)user_image_load_flat(
+                                 &image, "kos-bad-index",
+                                 (uint64_t)(uintptr_t)loaded, sizeof(loaded),
+                                 (uint64_t)(uintptr_t)&source, sizeof(source),
+                                 1));
+
+    /* Non-zero reserved field is rejected so future layout changes can
+     * still detect old binaries deterministically. */
+    source.reserved = 1;
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
+                             (uint64_t)user_image_load_flat(
+                                 &image, "kos-reserved",
+                                 (uint64_t)(uintptr_t)loaded, sizeof(loaded),
+                                 (uint64_t)(uintptr_t)&source, sizeof(source),
+                                 0));
+
+    /* image_size smaller than header is rejected. */
+    source.reserved = 0;
+    source.image_size = sizeof(source) - 1;
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
+                             (uint64_t)user_image_load_flat(
+                                 &image, "kos-tiny",
+                                 (uint64_t)(uintptr_t)loaded, sizeof(loaded),
+                                 (uint64_t)(uintptr_t)&source, sizeof(source),
+                                 0));
+}
+
 void test_user_image_load_bootfs_flat_rejects_missing_file(void) {
     uint8_t loaded[128] = { 0 };
     user_image_t image;

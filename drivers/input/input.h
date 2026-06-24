@@ -5,6 +5,19 @@
 
 #define INPUT_EVENT_QUEUE_SIZE 64
 
+/*
+ * Special (non-ASCII) key codes delivered through
+ * input_event_t::data.key.key. They live above 0xFF so they never
+ * collide with the 7-bit ASCII range that the UART and most
+ * keyboards emit. The shell uses UP/DOWN for command history; LEFT/
+ * RIGHT are reserved for future line editing (cursor movement, etc.)
+ * and are forwarded the same way.
+ */
+#define INPUT_KEY_UP    0x101U
+#define INPUT_KEY_DOWN  0x102U
+#define INPUT_KEY_LEFT  0x103U
+#define INPUT_KEY_RIGHT 0x104U
+
 typedef enum {
     INPUT_EVENT_KEY_PRESS,
     INPUT_EVENT_KEY_RELEASE,
@@ -37,5 +50,11 @@ int input_queue_poll_char(void);
 int input_queue_available(void);
 
 int input_uart_poll(void);
+/*
+ * Inject a single byte into the input queue through the same ANSI
+ * escape-sequence parser used for UART bytes. Useful for tests and
+ * for keyboard drivers that already produced a single byte.
+ */
+int input_inject_byte(int c);
 
 #endif

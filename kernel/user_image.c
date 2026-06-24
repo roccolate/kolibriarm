@@ -46,29 +46,56 @@ int user_image_load_flat(user_image_t *image, const char *name,
                          uint32_t entry_index) {
     const user_flat_image_header_t *header =
         (const user_flat_image_header_t *)(uintptr_t)source_base;
+    uint64_t header_size;
+    uint64_t image_size;
     uint64_t entry_offset;
 
-    if (source_base == 0 || source_capacity < sizeof(*header)) {
+    if (source_base == 0 || source_capacity < sizeof(header->magic)) {
         return -1;
     }
 
-    if (header->magic != USER_IMAGE_MAGIC ||
-        header->header_size < sizeof(*header) ||
-        header->header_size > header->image_size ||
-        header->entry_count == 0 ||
-        header->entry_count > USER_IMAGE_MAX_ENTRIES ||
-        entry_index >= header->entry_count ||
-        header->image_size > source_capacity) {
+    /*
+     * The first 4 bytes pick the on-disk layout. KLI1 is our native
+     * header (80 bytes); KOS is the KolibriOS header (24 bytes).
+     * Anything else is rejected so a corrupt or truncated blob cannot
+     * be silently executed. Per-format field validation happens below
+     * because the two layouts share only the leading magic word.
+     */
+    if (header->magic == USER_IMAGE_MAGIC) {
+        if (source_capacity < sizeof(*header) ||
+            header->header_size < sizeof(*header) ||
+            header->header_size > header->image_size ||
+            header->entry_count == 0 ||
+            header->entry_count > USER_IMAGE_MAX_ENTRIES ||
+            entry_index >= header->entry_count ||
+            header->image_size > source_capacity) {
+            return -1;
+        }
+        header_size = header->header_size;
+        image_size = header->image_size;
+        entry_offset = header->entry_offsets[entry_index];
+    } else if (header->magic == USER_KOS_MAGIC) {
+        const user_kos_image_header_t *kos =
+            (const user_kos_image_header_t *)(uintptr_t)source_base;
+
+        if (source_capacity < sizeof(*kos) || entry_index != 0 ||
+            kos->reserved != 0 || kos->image_size > source_capacity ||
+            kos->image_size < sizeof(*kos)) {
+            return -1;
+        }
+        header_size = sizeof(*kos);
+        image_size = kos->image_size;
+        entry_offset = kos->entry_offset;
+    } else {
         return -1;
     }
 
-    entry_offset = header->entry_offsets[entry_index];
-    if (entry_offset < header->header_size || entry_offset >= header->image_size) {
+    if (entry_offset < header_size || entry_offset >= image_size) {
         return -1;
     }
 
     return user_image_load_copy(image, name, load_base, load_capacity,
-                                source_base, header->image_size,
+                                source_base, image_size,
                                 source_base + entry_offset);
 }
 

@@ -53,4 +53,18 @@ int vfs_write_fd(int fd, const uint8_t *buffer, uint64_t size,
 int vfs_seek(int fd, uint64_t offset);
 int vfs_close(int fd);
 
+/*
+ * vfs_unlink removes a single file from its underlying filesystem.
+ * vfs_rename renames a file in the same directory.
+ *
+ * Currently only the FAT32 mount is wired up: paths starting with
+ * "/fat/" go through fat32_delete / fat32_rename. Other prefixes
+ * (tmpfs, bootfs) reject the call with ERR_NOENT. The arguments
+ * are validated against the caller's registered user regions by
+ * the syscall layer; vfs_unlink / vfs_rename assume the inputs
+ * are already safe to dereference.
+ */
+int vfs_unlink(const char *path);
+int vfs_rename(const char *old_path, const char *new_path);
+
 #endif

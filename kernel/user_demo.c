@@ -138,12 +138,109 @@ static int init_user_demo_process(process_t *process, const user_image_t *image,
                                        memory_size, map_mmio);
 }
 
-int user_demo_spawn_vfs(const char *path, uint32_t entry_index) {
+/*
+ * Place argv onto the new process's stack.
+ *
+ * The new process stack lives in g_user_stacks[slot] (kernel physical)
+ * and is mapped at user_demo_stack_vaddr(slot). The layout, from
+ * high address down to the initial sp:
+ *
+ *   [stack_top]
+ *     "argN-1\0"     <- argv[argc-1] points here
+ *     ...
+ *     "arg0\0"       <- argv[0] points here
+ *     NULL           <- argv[argc] sentinel
+ *     argv[argc-1]   <- pointer
+ *     ...
+ *     argv[0]
+ *     [sp = initial] <- returned as argv_ptr
+ *
+ * The argv budget is capped at USER_DEMO_ARGV_MAX_BYTES total so a
+ * hostile caller cannot push the new process off its stack.
+ */
+#define USER_DEMO_ARGV_MAX_STRINGS 8U
+#define USER_DEMO_ARGV_MAX_BYTES   256U
+
+static int place_argv_on_stack(uint32_t slot, const uint64_t *argv_ptr,
+                               uint32_t argc, uint64_t *out_argv_vaddr) {
+    uint8_t *stack = g_user_stacks[slot];
+    uint64_t stack_base = user_demo_stack_vaddr(slot);
+    uint64_t stack_top = stack_base + USER_STACK_SIZE;
+    uint64_t argv_vaddr;
+    uint64_t cursor;
+    uint64_t *argv_out;
+    uint64_t string_bytes;
+    uint32_t i;
+
+    if (argc == 0) {
+        *out_argv_vaddr = 0;
+        return 0;
+    }
+    if (argc > USER_DEMO_ARGV_MAX_STRINGS) {
+        return -1;
+    }
+
+    /*
+     * Measure each input string up front so the copy stays bounded.
+     * The total is capped at USER_DEMO_ARGV_MAX_BYTES to keep a
+     * hostile caller from forcing a huge stack copy. argv_ptr and
+     * each string pointer must be non-NULL; the strings themselves
+     * are not null-terminated inside a fixed cap because the cap
+     * rejects the argv long before a single string can exceed it.
+     */
+    string_bytes = 0;
+    for (i = 0; i < argc; i++) {
+        const char *str = (const char *)(uintptr_t)argv_ptr[i];
+        if (str == 0) {
+            return -1;
+        }
+        uint64_t len = 0;
+        while (str[len] != '\0') {
+            len++;
+        }
+        string_bytes += len + 1U;
+    }
+    if (string_bytes > USER_DEMO_ARGV_MAX_BYTES) {
+        return -1;
+    }
+
+    uint64_t total = string_bytes + (uint64_t)(argc + 1U) * sizeof(uint64_t);
+    /* AArch64 ABI requires the initial sp to be 16-byte aligned. */
+    total = (total + 15U) & ~(uint64_t)15U;
+    if (total > USER_STACK_SIZE) {
+        return -1;
+    }
+
+    argv_vaddr = stack_top - total;
+    cursor = argv_vaddr + (uint64_t)(argc + 1U) * sizeof(uint64_t);
+    argv_out = (uint64_t *)(stack + (argv_vaddr - stack_base));
+
+    for (i = 0; i < argc; i++) {
+        const char *src = (const char *)(uintptr_t)argv_ptr[i];
+        uint8_t *dst = stack + (cursor - stack_base);
+        uint64_t len = 0;
+        while (src[len] != '\0') {
+            dst[len] = (uint8_t)src[len];
+            len++;
+        }
+        dst[len] = '\0';
+        argv_out[i] = cursor;
+        cursor += len + 1U;
+    }
+    argv_out[argc] = 0;
+
+    *out_argv_vaddr = argv_vaddr;
+    return 0;
+}
+
+int user_demo_spawn_vfs(const char *path, uint32_t entry_index,
+                        const uint64_t *argv_ptr, uint32_t argc) {
     process_t *process;
     user_image_t image;
     uint32_t slot;
     const char *app_name;
     size_t name_len;
+    uint64_t argv_vaddr = 0;
 
     if (path == 0 || g_spawn_memory_size == 0) {
         return -1;
@@ -185,6 +282,22 @@ int user_demo_spawn_vfs(const char *path, uint32_t entry_index) {
                                g_spawn_memory_size, g_spawn_map_mmio) != 0) {
         process_release(process);
         return -1;
+    }
+
+    /* Always run place_argv_on_stack: it returns argv_vaddr=0 for
+     * argc==0, otherwise copies the strings and argv array into the
+     * new stack and stores the initial sp. This consolidates the
+     * argc==0 and argc>0 paths and keeps the inlined code small. */
+    process->regs[0] = 0;
+    process->regs[1] = 0;
+    if (place_argv_on_stack(slot, argv_ptr, argc, &argv_vaddr) != 0) {
+        process_release(process);
+        return -1;
+    }
+    if (argv_vaddr != 0) {
+        process->sp = argv_vaddr;
+        process->regs[0] = argc;
+        process->regs[1] = argv_vaddr;
     }
 
     process->state = PROCESS_READY;

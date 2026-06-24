@@ -2,6 +2,8 @@
 
 #include <stdint.h>
 
+#include "kernel/fat32.h"
+
 static vfs_node_t g_vfs_nodes[VFS_MAX_NODES];
 static char g_vfs_paths[VFS_MAX_NODES][VFS_MAX_PATH];
 static uint32_t g_vfs_node_count;
@@ -405,4 +407,89 @@ int vfs_close(int fd) {
     g_open_files[fd].flags = VFS_O_RDONLY;
     g_open_files[fd].used = 0;
     return 0;
+}
+
+/*
+ * vfs_unlink / vfs_rename dispatch. The kernel currently only
+ * supports destructive filesystem operations on the FAT32 root
+ * mounted at /fat/; tmpfs and bootfs reject the call with
+ * ERR_NOENT because their mounts expose immutable paths.
+ */
+static int vfs_fat32_basename(const char *path, char *out,
+                              uint64_t out_size) {
+    const char *slash;
+    uint64_t i;
+
+    if (path == 0 || out == 0 || out_size == 0) {
+        return -1;
+    }
+    slash = path;
+    for (const char *p = path; *p != '\0'; p++) {
+        if (*p == '/') {
+            slash = p + 1;
+        }
+    }
+    for (i = 0; i + 1U < out_size; i++) {
+        char c = slash[i];
+        if (c == '\0') {
+            break;
+        }
+        out[i] = c;
+    }
+    if (slash[i] != '\0') {
+        return -1;
+    }
+    out[i] = '\0';
+    return i == 0 ? -1 : 0;
+}
+
+int vfs_unlink(const char *path) {
+    char name[VFS_MAX_PATH];
+    fat32_fs_t *fs;
+
+    if (path == 0) {
+        return -1;
+    }
+    if (vfs_path_equals(path, "/") || vfs_path_equals(path, "/.")) {
+        return -1;
+    }
+    if (path[0] != '/' || path[1] != 'f' || path[2] != 'a' ||
+        path[3] != 't' || path[4] != '/' || path[5] == '\0') {
+        return -1;
+    }
+    fs = fat32_default_fs();
+    if (fs == 0 || fs->mounted == 0) {
+        return -1;
+    }
+    if (vfs_fat32_basename(path, name, sizeof(name)) != 0) {
+        return -1;
+    }
+    return fat32_delete(fs, name);
+}
+
+int vfs_rename(const char *old_path, const char *new_path) {
+    char old_name[VFS_MAX_PATH];
+    char new_name[VFS_MAX_PATH];
+    fat32_fs_t *fs;
+
+    if (old_path == 0 || new_path == 0) {
+        return -1;
+    }
+    if (old_path[0] != '/' || old_path[1] != 'f' || old_path[2] != 'a' ||
+        old_path[3] != 't' || old_path[4] != '/' || old_path[5] == '\0') {
+        return -1;
+    }
+    if (new_path[0] != '/' || new_path[1] != 'f' || new_path[2] != 'a' ||
+        new_path[3] != 't' || new_path[4] != '/' || new_path[5] == '\0') {
+        return -1;
+    }
+    fs = fat32_default_fs();
+    if (fs == 0 || fs->mounted == 0) {
+        return -1;
+    }
+    if (vfs_fat32_basename(old_path, old_name, sizeof(old_name)) != 0 ||
+        vfs_fat32_basename(new_path, new_name, sizeof(new_name)) != 0) {
+        return -1;
+    }
+    return fat32_rename(fs, old_name, new_name);
 }

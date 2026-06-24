@@ -40,6 +40,7 @@ int fat32_mount(fat32_fs_t *fs, fat32_read_sector_fn_t read_sector,
                 void *context);
 void fat32_set_write_sector(fat32_fs_t *fs,
                             fat32_write_sector_fn_t write_sector);
+fat32_fs_t *fat32_default_fs(void);
 int fat32_open_root(fat32_fs_t *fs, const char *name, fat32_file_t *file);
 int fat32_list_root(fat32_fs_t *fs, uint8_t *buffer, uint64_t capacity,
                     uint64_t *bytes_written);
@@ -48,6 +49,10 @@ int fat32_read(fat32_fs_t *fs, const fat32_file_t *file, uint64_t offset,
 int fat32_write(fat32_fs_t *fs, fat32_file_t *file, uint64_t offset,
                 const uint8_t *buffer, uint64_t size,
                 uint64_t *bytes_written);
+int fat32_create(fat32_fs_t *fs, const char *name, fat32_file_t *file);
+int fat32_delete(fat32_fs_t *fs, const char *name);
+int fat32_rename(fat32_fs_t *fs, const char *old_name,
+                 const char *new_name);
 void fat32_vfs_reset(void);
 int fat32_mount_vfs_root(fat32_fs_t *fs, const char *path);
 int fat32_mount_vfs_file(fat32_fs_t *fs, const char *path,

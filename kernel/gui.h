@@ -63,10 +63,20 @@ typedef struct {
     uint8_t used;
     /* Set when an EL0 owner has drawn into this window via
      * SYS_WINDOW_DRAW_RECT or SYS_WINDOW_DRAW_TEXT. When set, the kernel
-     * compositor skips the bg_color fillrect on redraw so the owner's
-     * drawing survives. The owner is responsible for painting its own
-     * background the first time. */
+     * compositor skips the bg_color fillrect on redraw and instead
+     * blits the window's backing buffer onto the framebuffer. The owner
+     * is responsible for painting its own background the first time.
+     */
     uint8_t owner_drawn;
+    /* Per-window backing buffer. Allocated lazily on the first owner
+     * draw; covers only the content area (excluding the kernel-drawn
+     * title bar). Width = window->w, height = window->h - title_h. When
+     * non-NULL, the compositor blits this buffer at (window.x,
+     * window.y + title_h) during gui_draw_window, so dragging or z-order
+     * changes keep the content attached to the window instead of
+     * leaving it stranded at the previous framebuffer position. */
+    uint32_t *backing;
+    uint32_t backing_capacity;
 } gui_window_t;
 
 typedef struct {
@@ -125,9 +135,11 @@ int gui_window_draw_rect(gui_desktop_t *desktop, uint32_t window_id,
                          int32_t x, int32_t y, uint32_t w, uint32_t h,
                          uint32_t color);
 int gui_window_clear(gui_desktop_t *desktop, uint32_t window_id,
-                     uint32_t color);
+                      uint32_t color);
+int gui_window_ensure_backing(gui_window_t *window);
+void gui_window_free_backing(gui_window_t *window);
 int gui_window_push_event(gui_window_t *window, uint32_t type,
-                          int32_t data1, int32_t data2);
+                           int32_t data1, int32_t data2);
 int gui_window_pop_event(gui_window_t *window, gui_event_t *out);
 int gui_move_window(gui_desktop_t *desktop, uint32_t window_id, uint32_t x,
                     uint32_t y);

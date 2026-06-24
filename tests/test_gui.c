@@ -962,3 +962,240 @@ void test_gui_window_for_pid_returns_owner_windows(void) {
                              (uint64_t)gui_window_for_pid(
                                  &desktop, 12345U, 0U));
 }
+
+/*
+ * Backing buffer tests: each owner-drawn window carries a per-window
+ * BGRA buffer. App draws land in the backing, and the compositor
+ * blits that backing onto the framebuffer during redraw. This keeps
+ * the content glued to the window across drags / focus changes /
+ * z-order shuffles, which is the concrete partial-update bug the
+ * pre-backing compositor could not survive.
+ */
+
+void test_gui_backing_buffer_lazy_allocates_on_first_draw(void) {
+    uint32_t pixels[64] = { 0 };
+    fb_t fb;
+    gui_desktop_t desktop;
+    uint32_t window_id;
+
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)fb_init(&fb, pixels, 8, 8, 8));
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)gui_init(&desktop, &fb, 0xff101010U));
+    desktop.cursor.visible = 0;
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_create_window(
+                                 &desktop, 0, 0, 8, 8, 0xff0000aaU,
+                                 0xffffffffU, &window_id));
+    /* No draw yet: no backing, no owner_drawn. */
+    gui_window_t *window = &desktop.windows[window_id];
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)window->owner_drawn);
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)(uintptr_t)window->backing);
+
+    /* First draw triggers backing allocation. */
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_window_draw_rect(
+                                 &desktop, window_id, 1, 1, 2, 1, 0xffff0000U));
+    TEST_ASSERT_TRUE(window->owner_drawn != 0);
+    TEST_ASSERT_TRUE(window->backing != 0);
+}
+
+void test_gui_backing_buffer_init_to_bg_color(void) {
+    uint32_t pixels[64] = { 0 };
+    fb_t fb;
+    gui_desktop_t desktop;
+    uint32_t window_id;
+
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)fb_init(&fb, pixels, 8, 8, 8));
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)gui_init(&desktop, &fb, 0xff101010U));
+    desktop.cursor.visible = 0;
+
+    /*
+     * The default backing is filled with the window's bg_color so the
+     * first blit does not flash through arbitrary heap bytes.
+     */
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_create_window(
+                                 &desktop, 0, 0, 8, 8, 0xff334455U,
+                                 0xffffffffU, &window_id));
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_window_draw_rect(
+                                 &desktop, window_id, 0, 0, 1, 1, 0xff000000U));
+
+    gui_window_t *window = &desktop.windows[window_id];
+    /* The owner's draw replaced pixel 0 with black; surrounding pixels
+     * stay at the bg_color that the kernel seeded into the backing. */
+    TEST_ASSERT_EQUAL_UINT64(0xff000000U, window->backing[0]);
+    TEST_ASSERT_EQUAL_UINT64(0xff334455U, window->backing[1]);
+    TEST_ASSERT_EQUAL_UINT64(0xff334455U, window->backing[8]);
+}
+
+void test_gui_backing_buffer_survives_compositor_redraw(void) {
+    uint32_t pixels[64] = { 0 };
+    fb_t fb;
+    gui_desktop_t desktop;
+    uint32_t window_id;
+
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)fb_init(&fb, pixels, 8, 8, 8));
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)gui_init(&desktop, &fb, 0xff101010U));
+    desktop.cursor.visible = 0;
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_create_window(
+                                 &desktop, 0, 0, 8, 8, 0xff000000U,
+                                 0xffffffffU, &window_id));
+
+    /* Owner paints a horizontal red bar at y=2. */
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_window_draw_rect(
+                                 &desktop, window_id, 1, 2, 6, 1, 0xffff0000U));
+
+    /* First draw: blit the backing, paint border. Red bar visible. */
+    gui_draw(&desktop);
+    for (uint32_t x = 1; x < 7; x++) {
+        TEST_ASSERT_EQUAL_UINT64(0xffff0000U, pixels[2 * 8 + x]);
+    }
+
+    /* Trigger another redraw without any new app draw. The backing is
+     * the source of truth, so the bar must still be there. */
+    gui_draw(&desktop);
+    for (uint32_t x = 1; x < 7; x++) {
+        TEST_ASSERT_EQUAL_UINT64(0xffff0000U, pixels[2 * 8 + x]);
+    }
+}
+
+void test_gui_backing_buffer_follows_window_on_drag(void) {
+    uint32_t pixels[64] = { 0 };
+    fb_t fb;
+    gui_desktop_t desktop;
+    uint32_t window_id;
+
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)fb_init(&fb, pixels, 8, 8, 8));
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)gui_init(&desktop, &fb, 0xff101010U));
+    desktop.cursor.visible = 0;
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_create_window(
+                                 &desktop, 0, 0, 4, 4, 0xff000000U,
+                                 0xffffffffU, &window_id));
+
+    /*
+     * Paint a 2x2 red square at content-local (0,0). On the FB this
+     * becomes (window.x, window.y) initially; the 1px border is
+     * painted on top of the blit so the top row / leftmost column
+     * of the square get overwritten by the border colour. The
+     * red rect only covers content columns 0..1 / rows 0..1, so
+     * its single surviving FB pixel is (1, 1).
+     */
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_window_draw_rect(
+                                 &desktop, window_id, 0, 0, 2, 2, 0xffff0000U));
+    gui_draw(&desktop);
+    /* Row 0 is entirely the top border. */
+    TEST_ASSERT_TRUE(pixels[0 * 8 + 1] != 0xffff0000U);
+    /* (1, 1) is the only inner red pixel; the rest of row 1 is
+     * the right border (col 3) or untouched bg_color (col 2). */
+    TEST_ASSERT_EQUAL_UINT64(0xffff0000U, pixels[1 * 8 + 1]);
+    /* Row 2 is entirely the backing's untouched bg_color (rows 2 and 3
+     * of the 4x4 backing were never drawn). */
+    TEST_ASSERT_EQUAL_UINT64(0xff000000U, pixels[2 * 8 + 2]);
+    /* Row 3 is the bottom border; cols 1..2 are interior cells. */
+    TEST_ASSERT_EQUAL_UINT64(0xff000000U, pixels[2 * 8 + 1]);
+
+    /* Drag the window by (3, 2). The compositor redraws; the backing
+     * blit follows the window, so the red square is now at (3, 2). */
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_move_window(
+                                 &desktop, window_id, 3, 2));
+    gui_draw(&desktop);
+
+    /* Old position should be empty (bg / gradient) again, since the
+     * backing no longer lives there. */
+    TEST_ASSERT_TRUE(pixels[0 * 8 + 0] != 0xffff0000U);
+    TEST_ASSERT_TRUE(pixels[1 * 8 + 1] != 0xffff0000U);
+
+    /* New position carries the red square. The 2x2 backing rect at
+     * content (0..1, 0..1) now lives at FB (3..4, 2..3). Borders
+     * overdraw the top row and the leftmost column, so the single
+     * surviving red pixel is FB (4, 3). */
+    TEST_ASSERT_TRUE(pixels[2 * 8 + 3] != 0xffff0000U);
+    TEST_ASSERT_TRUE(pixels[2 * 8 + 4] != 0xffff0000U);
+    /* FB (3, 3) is the new left border, not red. */
+    TEST_ASSERT_TRUE(pixels[3 * 8 + 3] != 0xffff0000U);
+    /* FB (4, 3) is the inner red pixel. */
+    TEST_ASSERT_EQUAL_UINT64(0xffff0000U, pixels[3 * 8 + 4]);
+}
+
+void test_gui_backing_buffer_freed_on_destroy(void) {
+    uint32_t pixels[64] = { 0 };
+    fb_t fb;
+    gui_desktop_t desktop;
+    uint32_t window_id;
+
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)fb_init(&fb, pixels, 8, 8, 8));
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)gui_init(&desktop, &fb, 0xff101010U));
+    desktop.cursor.visible = 0;
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_create_window(
+                                 &desktop, 0, 0, 4, 4, 0xff000000U,
+                                 0xffffffffU, &window_id));
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_window_draw_rect(
+                                 &desktop, window_id, 0, 0, 2, 2, 0xffff0000U));
+
+    gui_window_t *window = &desktop.windows[window_id];
+    TEST_ASSERT_TRUE(window->backing != 0);
+
+    /* Destroying the window must release the backing so the kernel heap
+     * can reuse the storage for the next window. */
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_destroy_window(
+                                 &desktop, window_id));
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)(uintptr_t)window->backing);
+    TEST_ASSERT_EQUAL_UINT64(0, window->backing_capacity);
+    TEST_ASSERT_EQUAL_UINT64(0, window->owner_drawn);
+}
+
+void test_gui_backing_buffer_reallocates_when_window_reused(void) {
+    uint32_t pixels[64] = { 0 };
+    fb_t fb;
+    gui_desktop_t desktop;
+    uint32_t first_id;
+    uint32_t second_id;
+
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)fb_init(&fb, pixels, 8, 8, 8));
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)gui_init(&desktop, &fb, 0xff101010U));
+    desktop.cursor.visible = 0;
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_create_window(
+                                 &desktop, 0, 0, 4, 4, 0xff000000U,
+                                 0xffffffffU, &first_id));
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_window_draw_rect(
+                                 &desktop, first_id, 0, 0, 1, 1, 0xffff0000U));
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_destroy_window(
+                                 &desktop, first_id));
+
+    /*
+     * The freed slot can host a new window of a different size; the
+     * new backing must be allocated fresh and zeroed. This guards
+     * against accidental reuse of the previous window's buffer.
+     * Backing is lazy so we trigger the first draw before asserting.
+     */
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_create_window(
+                                 &desktop, 0, 0, 6, 6, 0xff112233U,
+                                 0xffffffffU, &second_id));
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_window_draw_rect(
+                                 &desktop, second_id, 0, 0, 1, 1, 0xffff0000U));
+    gui_window_t *window = &desktop.windows[second_id];
+    TEST_ASSERT_TRUE(window->backing != 0);
+    /* Backing is initialised to bg_color before any app draw; the
+     * owner draw at (0, 0, 1, 1) replaced that pixel with red. */
+    TEST_ASSERT_EQUAL_UINT64(0xffff0000U, window->backing[0]);
+    TEST_ASSERT_EQUAL_UINT64(0xff112233U, window->backing[1]);
+    TEST_ASSERT_EQUAL_UINT64(0xff112233U, window->backing[6]);
+}

@@ -69,6 +69,12 @@ SECTIONS {
         __app_clock_end = .;
     } :text
 
+    .app_kos_hello : ALIGN(16) {
+        __app_kos_hello_start = .;
+        KEEP(*(.app_kos_hello_blob*))
+        __app_kos_hello_end = .;
+    } :text
+
     .rodata : ALIGN(8) {
         *(.rodata*)
     } :rodata
