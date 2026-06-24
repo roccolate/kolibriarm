@@ -1,407 +1,324 @@
 # Roadmap
 
-Honest trajectory for KolibriARM. The previous roadmap marked a lot of phases
-as "done" while the actual system was a foundations layer plus a single EL0
-demo blob. This version reflects what is **really** running, what still needs
-work, and where the next effort goes.
+Honest trajectory for KolibriARM. The first desktop milestone (Phase 10.0–10.5)
+is functionally complete on QEMU `virt`: the kernel boots into a graphical
+desktop, the panel owns the taskbar, and shell / editor / monitor / clock are
+real per-process EL0 apps that own windows, take input, and redraw through the
+per-rect compositor path. The host test suite covers the window ABI, IPC,
+process isolation, partial redraw, USB HID parsing, and the syscall number
+table; `make` and `make -C tests test` both pass.
+
+This file is intentionally shorter than the previous version. It concentrates
+on **what is actually missing**, ordered roughly by return on effort. The
+"version targets" table at the bottom still records where the milestones
+landed.
 
 A phase is "done" only when its exit criteria pass on real QEMU runs (and,
 where applicable, on real hardware).
 
 ---
 
-## Where we actually are
+## What is in place today
 
-The current system boots on QEMU `virt`, initializes the kernel foundations,
-mounts bootfs/VFS, and starts `/kolibri/panel` as the first EL0 app. The
-serial `k>` console still exists as a debug fallback, but the intended primary
-surface is now the graphical desktop.
+The system boots on QEMU `virt`, brings up virtio-gpu (640×480), virtio-input,
+GICv2, virtio-blk/FAT32, virtio-net/DHCP, USB HID enumeration, and the
+serial `k>` debug console. The kernel lands on a graphical desktop whose first
+userland process is the panel taskbar at the bottom of the screen.
 
-Userland is no longer one `programs/user_demo.S` blob. Each app under
-`programs/apps/` builds as a separate flat AArch64 image, is registered in
-`kernel/boot_program.c`, and is exposed through bootfs under
-`/kolibri/<name>`. `sys_spawn` loads those named images into separate
-processes with their own process state, user stack, and page table.
+Per-app, per-process windowing is real:
 
-The GUI is an experimental kernel compositor with per-process window
-ownership, focus, cursor state, click-to-raise, window dragging, title bars,
-and title-bar close events. The desktop starts empty; the panel owns the
-taskbar window and launches apps. `shell`, `clock`, `editor`, and `monitor`
-are windowed apps now.
-
-This is close to an alpha desktop foundation, but it is not a complete alpha
-yet. The remaining blockers are practical: make the interactive QEMU launch
-and close checks reliable, decide the first redraw/expose rule that survives
-overlapping windows, and keep the app ABI small enough to replace direct
-assembly syscalls with a tiny userland library later.
-
-### Foundations that are actually in place
-
-- AArch64 boot, BSS clear, EL1 entry, identity-mapped MMU
-- PMM (bitmap), kheap (kmalloc/kfree), VMM helpers, `TTBR0_EL1` install/read
-- Per-process user address spaces with PTE-backed anonymous mappings
-- Preemptive round-robin scheduler with timer IRQ, `sys_yield`, `sys_exit`
-- EL0 entry/exit through the exception vector, full register save/restore
-- GICv2 init, timer PPI, UART0 RX IRQ, C handler table
-- virtio-gpu modern MMIO driver; 640x480 scanout
-- virtio-input modern MMIO driver; events queued for keyboard and mouse
-- virtio-blk sector read/write; FAT32 BPB parse, root 8.3 listing, full
-  create/rename/delete and chain growth in addition to limited overwrite
-  of preallocated files
-- tmpfs (in-RAM) with create/read/write/delete
-- Fixed VFS, bootfs seed, named program registry, `/kolibri/<name>` app paths
-- Fixed-message IPC `sys_ipc_send` / `sys_ipc_recv` (syscalls 60-61)
-- Bitmap 8x8 font (ported from KolibriOS `8X8ISXP`), scalar 2D primitives,
-  alpha blending, clipping
-- Kernel-owned GUI compositor with per-process windows, cursor, focus, drag,
-  title bars, title-bar close events, and per-window BGRA backing buffers
-- Coalesced damage-rectangle tracking (cap 32 + "full" sentinel) so
-  `gui_draw` can repaint just the regions that changed
-- Window syscalls 70-80 (`SYS_WINDOW_CREATE/DESTROY/DRAW_TEXT/DRAW_RECT/EVENT/SET_TITLE/REDRAW/FOCUS/FOR_PID`, `SYS_CURSOR_SET_SHAPE`, `SYS_WINDOW_FLUSH`)
+- Each app under `programs/apps/` builds as a flat AArch64 image, is
+  registered in `kernel/boot_program.c`, exposed through bootfs under
+  `/kolibri/<name>`, and is launched as its own process with its own page
+  table and stack.
 - `SYS_SPAWN_ARGV` (8) places `argc` in `x0` and `&argv[0]` in `x1` per the
-  AArch64 procedure-call ABI
-- ELF-style flat-image loader (`kernel/user_image.c`) accepting both
-  `USER_IMAGE_MAGIC` (`KLI1`) and `USER_KOS_MAGIC` (`KOS`) headers
-- Panel taskbar app booted automatically as the first EL0 process
-- Kernel debug console (`k>`) with help/mem/ps/ticks/storage/fb/mouse/click
-- From-scratch virtio-net + DHCP client, polled by the kernel console thread
-- USB HID boot-protocol stack: PCI ECAM walker, xHCI/UHCI driver skeletons,
-  configuration-descriptor walker, HID boot keyboard/mouse report parsers
-  feeding the same `input_queue` as UART and virtio-input
+  AArch64 procedure-call ABI. The shell splits `run X Y Z` on whitespace and
+  forwards the tokens; the editor prints the received argv.
+- Per-window BGRA backing buffer in the kernel. App draws land in the
+  backing; the compositor blits during `gui_draw`. Drags and focus changes
+  carry content with the window.
+- Coalesced damage-rectangle tracking (cap 32 + "full" sentinel). Every
+  app pushes the smallest content-local rect that covers its last batch
+  of draws through `SYS_WINDOW_FLUSH` (80). The strict tests in
+  `tests/test_gui.c` lock down the in-rect fill, off-screen no-op, and
+  multiple disjoint rects.
+- Kernel-owned GUI compositor with per-process windows, focus, click-to-
+  raise, window dragging, title bars with text, title-bar close events,
+  16×16 cursor with arrow/hand shapes, vertical gradient background.
 
-### Remaining rough edges
+The ABI is frozen. `kernel/syscall_numbers.h` lists every implemented syscall
+with a `_Static_assert` next to each value; `tests/test_syscall_abi.c`
+exercises each dispatch entry at runtime. Any new syscall must add a row in
+SYSCALLS.md, an entry in `syscall_numbers.h`, the dispatch case in
+`kernel/syscall.c`, and a host test — in the same commit.
 
-- The app ABI is still direct AArch64 assembly syscalls; there is no C
-  userland helper library yet.
-- The shell owns a window and supports a small command set, but it has no
-  real scrollback, cursor rendering, or terminal emulation. (argv passing
-  through `SYS_SPAWN_ARGV` is in place and exercised by `run X Y Z`.)
-- The editor owns a window and edits `/tmp/note`, but it is intentionally
-  minimal: no cursor rendering, no scrolling, no arrow movement, and only
-  the first screenful is drawn.
-- The monitor owns a window and draws a compact `sys_proclist`/`sys_meminfo`
-  view, but it still has only the simplest fixed layout.
-- Live app redraws go through `SYS_WINDOW_FLUSH` (80). Editor, clock,
-  monitor, shell, and the panel each push the smallest content-local
-  rect that covers their last batch of draws; the partial-redraw
-  branch in `gui_draw` is exercised in production, not just in the
-  host suite.
-- Resize is defined in the event ABI but not produced. Minimize/maximize and
-  taskbar-owned focus controls are not implemented.
-- Phase 8 (RPi 4 port) builds but has never been booted on hardware.
+The kernel debug console (`k>`) still ships with `help`, `mem`, `ps`,
+`ticks`, `storage`, `fb`, `mouse`, and `click` for headless diagnostics.
 
 ---
 
-## Next milestone: a real desktop
+## What is actually missing
 
-**Goal:** the kernel boots into a graphical desktop with a visible mouse
-cursor, a taskbar, and at least four real EL0 applications — shell, editor,
-monitor, and a clock — each running as its own process with its own window
-that the user can move, raise, and close. `sys_spawn` launches a real
-per-process binary by name, not a label inside one shared blob.
+Listed roughly by return on effort. Each item names the file or syscall it
+would touch.
 
-This is the smallest milestone that makes the system feel like KolibriOS
-instead of a demo.
+### 1. Window placement syscalls (move / resize / get-bounds)
 
-### Phase 10.0 — Honest split of the userland
+`SYSCALLS.md` reserves `sys_window_get_bounds`, `sys_window_set_bounds`,
+`sys_window_show`, and `sys_window_hide`, but none of them are implemented.
+Today a window's position is fixed by `sys_window_create` and the kernel
+moves it only as the user drags. An app that wants to remember its
+position, restore it on next launch, or react to a resize event has no way
+to ask the kernel where it lives.
 
-Stop treating `user_demo.S` as the userland. Each application is now its own
-flat binary with its own linker script, and the loader can find them by name.
+Implementation sketch:
+- `sys_window_get_bounds(win, out_x, out_y, out_w, out_h)` validates the
+  caller is the owner and copies the four fields.
+- `sys_window_set_bounds(win, x, y, w, h)` validates ownership, updates
+  the window, and calls `gui_request_redraw` for the union of the old and
+  new rects.
+- A host test constructs a desktop, calls `sys_window_set_bounds` with a
+  smaller rect, and asserts the backing buffer was reallocated and the
+  window's geometry matches.
 
-- Refactor `programs/user_demo.S` into one `.S` per app under `programs/apps/`
-  (start with `hello`, `loop`, `shell`, `editor`, `monitor`, `fault`).
-- Each app defines its own flat image header (magic, size, single entry).
-- `boot_program.c` keeps a fixed-size registry of `(name, image, size)` and
-  exposes `boot_program_find("shell")` etc.
-- VFS exposes each registered image under `/kolibri/<name>` for the existing
-  sys_spawn path; FAT32 copies become optional overrides.
-- `sys_spawn` only accepts `/kolibri/<name>` and returns the new pid, or
-  -errno on failure.
+This unblocks the editor and monitor remembering their last position and
+opens the door to the resize event ABI being producible.
 
-Exit criteria:
-- [x] Nine independent flat EL0 binaries built and registered.
-- [x] `sys_spawn("/kolibri/shell", 0)` returns a fresh pid with its own
-      page table and stack.
-- [x] Existing host tests still pass.
+### 2. Editor cursor and arrow keys
 
-### Phase 10.1 — Mouse, cursor, hit testing
+The editor draws the visible prefix and re-displays the buffer on each
+keystroke, but it has no caret: there is no indication of where the next
+keystroke will land. Arrow keys are ignored. Backspace always deletes the
+last byte, never the one before the caret. Saving to `/tmp/note` writes the
+whole buffer from offset 0; in-place edits are impossible.
 
-- Consume the `INPUT_EVENT_MOUSE_MOVE` and `INPUT_EVENT_MOUSE_BUTTON` events
-  the virtio-input driver already queues.
-- Track cursor `(x, y)` in the kernel and draw a 16x16 cursor on top of the
-  desktop redraw.
-- Hit-test against the window list and dispatch the focused window on click.
-- Reserve a stable syscall number space for window operations (start at 70,
-  not 60+, to leave room for the IPC range).
+Implementation sketch:
+- Track `caret` (uint32_t, 0..len) in the panel frame.
+- `SYS_WINDOW_DRAW_RECT` a 1×8 (or 2×8) cursor at `(12 + caret*8, …)` in
+  the text row, then `SYS_WINDOW_FLUSH` the cursor rect only.
+- Left/Right keys move the caret; Up/Down move to the previous/next line.
+- Backspace deletes `text[caret-1]` and decrements caret; insert-at-caret
+  shifts the tail. Save writes from `caret` or rewrites the whole file
+  depending on length delta.
 
-Exit criteria:
-- [ ] Cursor visible in `make qemu-fb-visible` and tracks the mouse.
-- [x] `ps` shows the cursor position read from kernel state.
-- [x] Click on a window raises it above overlapping windows.
-- [x] Click on the desktop deselects the focused window.
+### 3. Shell scrollback and prompt placement
 
-### Phase 10.2 — Window manager (per-process)
+The shell shows 8 fixed lines (`DISPLAY_LINES=8`) of 48 columns and a
+prompt at row 7. There is no scrollback: when the 8 lines are full, the
+oldest line is silently overwritten. Cursor placement on the prompt is
+implicit. Long-running commands have no visual feedback while they run.
 
-- `gui_window_t` grows an `owner_pid` field; `gui_create_window` requires an
-  owner pid and refuses cross-process use.
-- `sys_window_create(x, y, w, h, title)` returns a window handle visible to
-  the owner only.
-- `sys_window_draw_text(handle, x, y, text, color)` for the in-window
-  text path apps actually use.
-- `sys_window_draw_rect` for the same. Lines, circles, and bitmaps are still
-  future draw primitives.
-- `sys_window_event` yields for a bounded number of scheduler turns, then
-  returns packed events or `ERR_AGAIN`.
-- `sys_window_destroy(handle)` removes an owner window. Title-bar close clicks
-  are delivered to the owner as `GUI_EVENT_CLOSE`.
-- Kernel redraws the desktop on every state change; apps do not touch the
-  framebuffer directly.
+Implementation sketch:
+- Add a circular buffer of recent lines (depth ~256), drawn top-down with
+  a `scroll_offset` the user can change via PgUp/PgDn.
+- Render the prompt at the bottom of the visible area, not at a fixed row.
+- While a `run` is in flight, render a "running…" marker that updates when
+  the child exits.
 
-Exit criteria:
-- [x] Two apps, two windows, each redraws only its own region on key event.
-      Editor, clock, and monitor push a content-local damage rect through
-      `SYS_WINDOW_FLUSH` (80); the partial-redraw branch in `gui_draw`
-      coalesces multiple draws and only repaints the marked region. The
-      strict tests in `tests/test_gui.c` cover in-rect fills, off-screen
-      no-ops, and multiple disjoint rects in one draw.
-- [x] A crashed app's window stays around until the user closes it.
-- [x] A moving drag updates the window in real time at host-testable speed.
+### 4. Resize events
 
-### Phase 10.3 — Desktop shell and taskbar
+`GUI_EVENT_RESIZE` is defined in `kernel/gui.h:40` and reserved in the
+event ABI, but the kernel never produces it. Adding a user-facing resize
+border would emit it; even without the border, programmatic resizes from
+`sys_window_set_bounds` should fire it for the owner.
 
-- The kernel boots a small desktop process (the new "panel") that owns the
-  taskbar at the bottom.
-- The panel reads the list of registered apps from the loader and draws one
-  icon per app on the left.
-- Clicking an icon calls `sys_spawn` for that app.
-- The taskbar shows running apps by pid; clicking an entry raises its window.
-- Background is a vertical gradient drawn by the kernel compositor.
-- The existing serial `k>` debug console is no longer the primary user
-  surface; it stays as a debug fallback.
+Implementation sketch:
+- After `gui_move_window` / a future `gui_resize_window`, push a
+  `GUI_EVENT_RESIZE` with the new `(w, h)` into the owner's queue.
+- Add a host test that resizes a window and asserts the owner's event
+  queue has the resize triple.
 
-Exit criteria:
-- [x] Boot reaches the desktop without the user typing anything.
-- [ ] Clicking the editor icon spawns the editor app, which opens its own
-      window and starts editing `/tmp/note`.
-- [ ] Closing the editor's window does not crash the panel or the kernel.
+### 5. Minimize / maximize and taskbar focus controls
 
-### Phase 10.4 — Real apps (minimum four)
+The title bar has only a close box. There is no minimize button, no
+maximize/restore, no taskbar-owned focus controls. The panel's
+running-apps row is clickable for `SYS_WINDOW_FOCUS`, but it does not
+expose minimize/restore affordances.
 
-Each app is a small flat binary that owns one window and reacts to events.
+Implementation sketch:
+- Define `GUI_EVENT_MINIMIZE` and `GUI_EVENT_MAXIMIZE` next to
+  `GUI_EVENT_CLOSE`. Map clicks on dedicated title-bar boxes to them.
+- Track `minimized` per window; skip it in `gui_draw` and grey the
+  corresponding panel slot.
+- Add a restore click region or double-click handler.
 
-- `shell` — owns one window, parses a small command set, and supports
-  `run <name>` for any registered app. It still ignores trailing args and uses
-  a fixed line display rather than terminal emulation.
-- `editor` — owns one window, appends printable input, supports backspace and
-  newline, saves `/tmp/note` with ctrl-s, and closes with ctrl-q or title-bar
-  close. Cursor movement and scrolling are not implemented yet.
-- `monitor` — owns one window and redraws process, free-page, and tick data
-  from the existing process/info syscalls.
-- `clock` — owns one window and redraws time from the existing timer ticks.
+### 6. Per-window cursor region registry
 
-Exit criteria:
-- [ ] All four apps run together without crashing.
-- [ ] Editing in `editor` is visible only inside the editor window.
-- [x] `shell` can spawn any registered app by name with `run <name>`.
-- [x] `shell` correctly passes args to spawned apps. `SYS_SPAWN_ARGV` (syscall
-      8) accepts `argv_ptr` and `argc`; the kernel copies each referenced
-      string onto the new process's stack and presents the spawned process
-      with `x0 = argc` and `x1 = &argv[0]` per the AArch64 procedure-call
-      ABI. The shell splits `run X Y Z` on whitespace and forwards the
-      resulting tokens; the editor prints the received argv to stdout and
-      paints an `ARGV:` line so the path is visible without a debugger.
+`SYS_CURSOR_SET_SHAPE` (79) takes a global hint. The panel uses it for
+launcher-button hover, but apps that draw custom widgets have no way to
+register cursor shapes for individual regions of their window.
 
-### Phase 10.5 — Polish and KolibriOS ports
+Implementation sketch:
+- `sys_cursor_register_region(win, x, y, w, h, shape)` stores regions in
+  the window struct; `gui_dispatch_input` consults them during move
+  events and overrides the kernel default.
 
-- Replace the 5x7 font with an 8x8 font ported from KolibriOS's `8X8ISXP`
-  table; this is the only piece of KolibriOS source we need at first.
-- Window decorations: title bar with text, minimize/close boxes drawn by the
-  WM, active vs inactive border colors.
-- Add the `KOS` flat format as a synonym for our flat image header so we can
-  reuse KolibriOS tools for cross-building demos in the long term.
-- Sticky key handling for the shell (`up` arrow recalls the previous line).
-
-Exit criteria:
-- [x] Visible title bars with text on every app window that opts in via
-      `sys_window_set_title(window_id, title_ptr, title_h)`. `shell`,
-      `editor`, `monitor`, and `clock` are current opt-ins. The panel stays a
-      bar without title text so its 32 px height can keep all launcher
-      buttons.
-- [x] Cursor changes shape over kernel title decorations (hand over title
-      bar/close box, arrow elsewhere).
-- [x] Cursor changes shape over taskbar launcher buttons through
-      `sys_cursor_set_shape(0=arrow, 1=hand)`.
-- [x] Building from a KolibriOS `.kos` demo file works for at least hello.
-      `programs/apps/kos_hello.S` is the smallest KOS demo and the kernel
-      recognises `USER_KOS_MAGIC` (`0x00534F4B`) alongside the native
-      `USER_IMAGE_MAGIC` (`0x31494c4b`) in `user_image_load_flat`.
-- [x] Sticky key handling for the shell (`up` arrow recalls the previous
-      line). The kernel's input parser turns ANSI `ESC [ A/B/C/D` into
-      `INPUT_KEY_UP/DOWN/LEFT/RIGHT` events (`drivers/input/input.c`);
-      the shell keeps a depth-8 command history ring and lets the user
-      walk back through it with Up/Down.
-- [x] Damage-rectangle tracking. The compositor keeps a coalesced damage
-      list (cap 32, with a "full" sentinel that short-circuits further
-      adds) and `gui_draw` walks the list so each redraw only repaints
-      the regions that actually changed. Editor, clock, monitor, shell,
-      and the panel push content-local damage through `SYS_WINDOW_FLUSH`
-      (80); the strict tests in `tests/test_gui.c` cover the in-rect
-      fill, the off-screen no-op, and multiple disjoint rects in a
-      single draw.
-
----
-
-## Debug / review / finish
-
-Concrete items the kernel needs before Phase 10.5 can be honestly checked off.
-Each one names the command that proves it.
-
-### A. Interactive QEMU verification (no host test substitutes)
+### 7. Interactive QEMU verification (no host test substitutes)
 
 The host suite covers the GUI primitives in isolation, but several exit
-criteria only become true when a windowed session runs end to end.
+criteria only become true when a windowed session runs end to end. The
+manual checks the README needs to advertise:
 
-1. `make qemu-fb-visible` — visible mouse cursor that tracks the device.
-   Manual check; covers Phase 10.1.
-2. Same target — click an editor icon on the panel and confirm `/tmp/note`
-   editing shows up only inside the editor window. Covers Phase 10.3 and
-   Phase 10.4 (per-window isolation).
-3. Same target — open the four apps in sequence, close them via title-bar
-   close, and confirm no crash and no leaked window. Covers Phase 10.3 and
-   Phase 10.4.
+1. `make qemu-fb-visible` — confirm the cursor is visible and tracks the
+   virtio mouse.
+2. Same target — click the editor icon on the panel, type into the
+   editor, and confirm the chars appear only inside the editor window.
+3. Same target — open all four apps, close them via title-bar close,
+   confirm no crash and no leaked window.
 4. `make qemu-usb` — confirm the boot prints "USB: device on port 0/1"
-   stay visible and reach a clean input loop. Full HID delivery needs a
-   MMIO-BAR UHCI, which qemu-virt does not expose; record the gap rather
-   than chasing it.
+   reach a clean input loop. Full HID delivery needs a MMIO-BAR UHCI,
+   which qemu-virt does not expose; record the gap rather than chasing it.
 
-### B. Switch app redraws to the per-rect path — done
+There is no scripted screenshot test yet. Adding one (a `tests/screenshot`
+that boots QEMU headless, captures the framebuffer, and diffs against a
+checked-in PNG) would catch visual regressions without a human in the loop.
 
-`programs/apps/{editor,clock,monitor,shell,panel}.S` now call
-`SYS_WINDOW_FLUSH` (80) for their content redraws. The shell flushes
-its full content area on each redraw so a keystroke does not repaint
-the rest of the desktop; the panel flushes just the button row on
-hover changes and just the running-apps row on proclist refreshes.
-Strict partial-redraw tests in `tests/test_gui.c`
-(`test_gui_damage_partial_repaint_paints_every_pixel_in_rect`,
-`test_gui_damage_partial_repaint_skips_when_rect_outside_fb`,
-`test_gui_damage_partial_repaint_with_multiple_disjoint_rects`) cover
-the in-rect fill, the off-screen no-op, and multiple disjoint rects
-in a single draw.
+### 8. C userland library — `libkarm` + `libkarmdesk`
 
-### C. Code review leftovers from AGENTS.md audit — done
+Every app is hand-written AArch64 assembly that issues `svc #0` directly,
+with its own `_start` and its own copy of the syscall numbers. This does
+not scale past a handful of one-screenful demos. AGENTS.md already plans
+two libraries; this is the concrete plan to build them.
 
-- `drivers/input/virtio_input.c` no longer includes `<string.h>`.
-- `kernel/user_demo.{c,h}` has been renamed to `kernel/panel_boot.{c,h}`.
-  The kernel-side helpers now expose `panel_boot_run`,
-  `kolibri_spawn_vfs`, and `el0_return_address`. `kernel_main` boots
-  the panel process registered through bootfs; there is no embedded
-  `programs/user_demo.S` left to keep in sync.
+**`programs/libkarm/`** — process, memory, I/O, IPC, and system-info
+syscalls only (numbers 1–61, 100–102). Stable surface, expected to barely
+change once written, since `kernel/syscall_numbers.h` already freezes
+these numbers with a `_Static_assert` per entry.
 
-### D. Strict tests for the partial-redraw path — done
+- `syscall.S` — the only file in userland allowed to contain `svc #0`.
+  Raw numbered trampolines (`__syscall0`..`__syscall6`).
+- `syscall.h` — one typed wrapper per syscall (`kli_write`, `kli_exit`,
+  `kli_spawn_argv`, …), naming convention `kli_<name without sys_ prefix>`.
+- `errno.h` — named constants mirroring the frozen error table, plus
+  `kli_isok()` / `kli_again()` helpers. `ERR_AGAIN` is normal control flow
+  for UART read, IPC, and window-event polling — wrappers must not treat
+  it as a hard failure.
+- `crt0.S` — shared `_start`. Accepts `x0=argc, x1=&argv[0]` from
+  `SYS_SPAWN_ARGV`, falls back to `argc=0, argv=NULL` when spawned via
+  plain `sys_spawn`, calls `int main(int argc, char **argv)`, forwards
+  the return value to `sys_exit`.
+- `string.c` / `string.h` — freestanding `memcpy`, `memset`, `memmove`,
+  `strlen`, `strcmp`, a bounded `strlcpy`, and `kli_utoa`/`kli_itoa` for
+  `monitor`/`clock` to render counters. No `printf`.
 
-Three new tests in `tests/test_gui.c` lock down the partial-redraw
-behaviour:
+**`programs/libkarmdesk/`** — window/compositor syscalls only (70–80).
+Deliberately separate from `libkarm` because this range is the one still
+churning (item #1 above adds `sys_window_get_bounds`/`set_bounds`, item #4
+adds the resize event, item #5 adds minimize/maximize). Isolating it means
+those additions touch one small library, not the stable syscall surface.
 
-- `test_gui_damage_partial_repaint_paints_every_pixel_in_rect` —
-  drives a 16×16 desktop with a 4×4 rect at (4,4), asserts every
-  pixel inside the rect was repainted and every pixel on the four
-  borders and the four corners keeps its prior value.
-- `test_gui_damage_partial_repaint_skips_when_rect_outside_fb` —
-  pushes rects that are entirely above, to the right, or at negative
-  coordinates and asserts nothing was repainted and the damage list
-  stays empty.
-- `test_gui_damage_partial_repaint_with_multiple_disjoint_rects` —
-  pushes two non-overlapping rects in one draw and asserts both were
-  painted while the pixels between and around them keep their prior
-  value.
+- `gui.h` — thin wrappers for `sys_window_create` through
+  `sys_window_flush`, plus the frozen `gui_event_t` triple
+  (`type, data1, data2`, event IDs 1–6). Every app already calls
+  `SYS_WINDOW_FLUSH` (80) directly today; this just gives that call a
+  typed signature instead of an inline `svc #0`.
 
-These join the existing
-`test_gui_damage_partial_repaint_leaves_pixels_outside_rect` and
-`test_gui_damage_full_sentinel_re_paints_everything` so any
-regression in the partial branch fails `make -C tests test` in seconds.
+**Migration is incremental, gated by the existing host suite:**
+
+1. Build both libraries. Nothing in `programs/apps/` changes yet.
+2. Port the smallest app (`clock`, not `shell` or `editor`) to
+   `crt0.S` + `syscall.h`. Run `make -C tests test` and `make qemu`.
+   Hard gate before touching the next app.
+3. Migrate `monitor`, then `editor`, then `shell`, same gate each time.
+4. Only after every app is on `libkarm`, switch their window calls to
+   `libkarmdesk`'s `gui.h`.
+5. No syscall renumbering during this work. If a number looks wrong,
+   stop and raise it — don't shift the 70–79 GUI range into 60–69,
+   that's IPC's range (SYSCALLS.md already warns about this).
+
+Exit criteria:
+
+- [ ] `libkarm` and `libkarmdesk` exist and compile standalone.
+- [ ] `clock` builds and runs against `libkarm`/`crt0.S` in
+      `make qemu` with no user-visible behavior change.
+- [ ] All four apps migrated, each in its own commit.
+- [ ] `tests/test_syscall_abi.c` and the full host suite still pass.
+- [ ] No entries in `kernel/syscall_numbers.h` changed value.
+
+### 9. RPi 4 hardware bring-up
+
+The RPi 4 build target is wired up but has never been booted on hardware.
+The qemu-virt desktop ships first; the RPi port waits until the kernel
+contract is stable enough that bringing it up does not require touching
+the core.
+
+### 10. Resilience: what happens when the panel crashes
+
+The panel is a regular EL0 process. If it faults, the desktop has no
+taskbar, no launcher, and no way to raise running apps. There is no
+restart policy. The minimal fix is to detect the panel's exit from the
+kernel and relaunch it from `bootfs`.
+
+### 11. Engine and multimedia runtime (deferred)
+
+`docs/ENGINE_MULTIMEDIA.md` sketches a separate runtime for graphics and
+audio. That work is intentionally deferred until after the desktop
+milestone is solid.
 
 ---
 
 ## After the desktop
 
-The roadmap does not commit to anything beyond Phase 10.5 yet. The next set of
-candidates, in rough order of return on effort:
+The next set of candidates beyond this list, in rough order of return on
+effort:
 
-- **Per-window backing buffers (done).** Every owner-drawn window
-  owns a per-window BGRA buffer that the kernel blits onto the
-  framebuffer during `gui_draw`. App draws (`SYS_WINDOW_DRAW_RECT`
-  and `SYS_WINDOW_DRAW_TEXT`) land in the backing instead of the
-  live framebuffer, so drags and focus changes carry the content
-  with the window. The first concrete partial-update bug — the
-  previous compositor leaving the app's content stranded at the
-  window's old framebuffer position after a drag — is gone.
-- **USB HID foundations (done).** `drivers/pci/` walks the ECAM at
-  0x4010000000 and decodes BARs; `drivers/usb/hid.{c,h}` parses boot
-  reports (8-byte keyboard, 3-byte mouse); `drivers/usb/usb_core.{c,h}`
-  walks configuration descriptors and exposes standard requests;
-  `drivers/usb/uhci.{c,h}` defines the registers, a static frame
-  list (4 KB) and 32-element TD pool, and runs real SETUP+DATA+STATUS
-  control transfers plus interrupt-in TD chains. The boot-protocol
-  translator (`usb_hid_keyboard_report`, `usb_hid_mouse_report`)
-  converts reports into `input_event_t` and feeds the same
-  `input_queue` the UART and virtio-input use. The kernel runs
-  `usb_enumerate_default_device` (SET_ADDRESS → GET_DESCRIPTOR →
-  GET_CONFIGURATION → SET_CONFIGURATION), registers each HID
-  interface with `usb_hid_init`, switches it to boot protocol via
-  HID SET_PROTOCOL, and the input thread calls `usb_hid_poll_all`
-  every tick. Live `make qemu-usb` reaches "USB: controller
-  initialized" and "USB: device on port 0/1" on the qemu-xhci path;
-  full HID event delivery needs a UHCI controller with MMIO BARs
-  (QEMU virt's `piix3-usb-uhci` is I/O-only, which is the next gap to
-  close).
+- **Per-window backing buffers (done).** Every owner-drawn window owns a
+  per-window BGRA buffer; drags and focus changes carry content with the
+  window.
+- **USB HID foundations (done).** `drivers/pci/` walks the ECAM; the
+  boot-protocol translator feeds the same `input_queue` the UART and
+  virtio-input use; the kernel reaches "USB: device on port 0/1" on the
+  qemu-xhci path. Full HID delivery needs a UHCI with MMIO BARs, which
+  qemu-virt does not expose.
 - **Switch apps to per-rect redraws (done).** Editor, clock, monitor,
   shell, and the panel each push the smallest content-local rect that
-  covers their last batch of draws through `SYS_WINDOW_FLUSH` (80). The
-  shell flushes its full content area on each redraw so a keystroke
-  does not repaint the rest of the desktop; the panel flushes just the
-  button row on hover changes and just the running-apps row on
-  proclist refreshes.
-- **Remove the embedded user demo (done).** `kernel/user_demo.{c,h}`
-  has been renamed to `kernel/panel_boot.{c,h}`. `kernel_main` boots
-  the panel process registered through bootfs; there is no embedded
-  `programs/user_demo.S` left to keep in sync.
-- SMP: enable the secondary cores after the uniprocessor desktop is stable.
-- A minimal TCP/HTTP client for `wget` style apps.
-- Real hardware boot on RPi 4 with the same desktop visible over HDMI.
+  covers their last batch of draws through `SYS_WINDOW_FLUSH` (80).
+- **Remove the embedded user demo (done).** `kernel/user_demo.{c,h}` was
+  renamed to `kernel/panel_boot.{c,h}`. `kernel_main` boots the panel
+  process registered through bootfs.
 
-The RPi 4 port stays in the repo as a buildable board, but it is **not**
-"in progress" until the QEMU desktop ships first.
+Beyond those:
+
+- A scripted screenshot test for the desktop milestone.
+- `libkarm` (syscall wrappers) and `libkarmdesk` (window/compositor
+  helpers) so future apps can be written in C.
+- TCP/HTTP for `wget`-style apps.
+- SMP: enable the secondary cores after the uniprocessor desktop is
+  stable.
+- Real hardware boot on RPi 4 with the same desktop visible over HDMI.
 
 ---
 
 ## Style boundaries (carried over from AGENTS.md)
 
 - No libc, no POSIX, no Linux compatibility layer.
-- AArch64 asm only at the CPU boundary, with a comment when control flow is
-  subtle.
-- Reuse existing modules before adding new ones: `kernel/mm`, `kernel/sched`,
-  `kernel/timer`, `drivers/irq`, `drivers/uart`, `kernel/gui`.
-- Prefer a `drivers/boards/qemu_virt/` platform layer before touching RPi 4.
-- Port ideas from KolibriOS, not its x86 asm. The 8x8 font and the
-  `KOS` header are the first ports; syscall IDs, IPC semantics, and window
-  list layout are next.
-- Keep the kernel readable in one sitting. If a module stops fitting on a
-  few pages, split it before adding features.
+- AArch64 asm only at the CPU boundary, with a comment when control flow
+  is subtle.
+- Reuse existing modules before adding new ones: `kernel/mm`,
+  `kernel/sched`, `kernel/timer`, `drivers/irq`, `drivers/uart`,
+  `kernel/gui`.
+- Prefer a `drivers/boards/qemu_virt/` platform layer before touching
+  RPi 4.
+- Port ideas from KolibriOS, not its x86 asm. The 8×8 font and the `KOS`
+  header are the first ports; syscall IDs, IPC semantics, and window list
+  layout are next.
+- Keep the kernel readable in one sitting. If a module stops fitting on
+  a few pages, split it before adding features.
 
 ---
 
 ## Version targets
 
-| Version | Milestone                                       | Phases     |
-|---------|-------------------------------------------------|------------|
-| v0.1    | Boots, UART output                              | 0          |
-| v0.2    | Memory management working                       | 0–1        |
-| v0.3    | Preemptive multitasking                         | 0–2        |
-| v0.4    | Real process address spaces                     | 0–2.5      |
-| v0.5    | Drivers + framebuffer                           | 0–3        |
-| v0.6    | Board abstraction cleanup                       | 0–3.6      |
-| v0.7    | Multiple real EL0 apps + per-process windows    | 0–10.0–10.4 |
-| v0.8    | QEMU desktop: panel + taskbar + 4 apps + mouse  | 0–10.5     |
-| v1.0    | Usable on QEMU: real desktop, real apps         | 0–10.5     |
+| Version | Milestone                                       | Phases                |
+|---------|-------------------------------------------------|-----------------------|
+| v0.1    | Boots, UART output                              | 0                     |
+| v0.2    | Memory management working                       | 0–1                   |
+| v0.3    | Preemptive multitasking                         | 0–2                   |
+| v0.4    | Real process address spaces                     | 0–2.5                 |
+| v0.5    | Drivers + framebuffer                           | 0–3                   |
+| v0.6    | Board abstraction cleanup                       | 0–3.6                 |
+| v0.7    | Multiple real EL0 apps + per-process windows    | 0–10.0–10.4           |
+| v0.8    | QEMU desktop: panel + taskbar + 4 apps + mouse  | 0–10.5                |
+| v1.0    | Usable on QEMU: real desktop, real apps         | 0–10.5                |
 | v1.5    | Running on real RPi 4 hardware                  | 0–10.5 + RPi bring-up |
-| v2.0    | Engine and multimedia runtime (see ENGINE_MULTIMEDIA.md) | 9–15 |
+| v2.0    | Engine and multimedia runtime                   | 9–15                  |
