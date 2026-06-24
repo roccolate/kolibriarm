@@ -62,27 +62,17 @@ The kernel debug console (`k>`) still ships with `help`, `mem`, `ps`,
 Listed roughly by return on effort. Each item names the file or syscall it
 would touch.
 
-### 1. Window placement syscalls (move / resize / get-bounds)
+### 1. Window placement syscalls (move / resize / get-bounds) — done
 
-`SYSCALLS.md` reserves `sys_window_get_bounds`, `sys_window_set_bounds`,
-`sys_window_show`, and `sys_window_hide`, but none of them are implemented.
-Today a window's position is fixed by `sys_window_create` and the kernel
-moves it only as the user drags. An app that wants to remember its
-position, restore it on next launch, or react to a resize event has no way
-to ask the kernel where it lives.
-
-Implementation sketch:
-- `sys_window_get_bounds(win, out_x, out_y, out_w, out_h)` validates the
-  caller is the owner and copies the four fields.
-- `sys_window_set_bounds(win, x, y, w, h)` validates ownership, updates
-  the window, and calls `gui_request_redraw` for the union of the old and
-  new rects.
-- A host test constructs a desktop, calls `sys_window_set_bounds` with a
-  smaller rect, and asserts the backing buffer was reallocated and the
-  window's geometry matches.
-
-This unblocks the editor and monitor remembering their last position and
-opens the door to the resize event ABI being producible.
+`sys_window_get_bounds` (81) and `sys_window_set_bounds` (82) land in
+the 70..82 window range. `get_bounds` reads `(x, y, w, h)` for the
+caller with ownership validation; `set_bounds` moves and/or
+resizes the window in one step, validates the new geometry against
+the desktop framebuffer, and delegates to `gui_resize_window`
+which reallocates the per-window backing buffer on size change and
+pushes `GUI_EVENT_RESIZE` onto the owner's event queue. The
+`show`/`hide` pair is still unimplemented and stays in the
+"planned but not implemented" list.
 
 ### 2. Editor cursor and arrow keys
 
@@ -115,18 +105,16 @@ Implementation sketch:
 - While a `run` is in flight, render a "running…" marker that updates when
   the child exits.
 
-### 4. Resize events
+### 4. Resize events — done
 
-`GUI_EVENT_RESIZE` is defined in `kernel/gui.h:40` and reserved in the
-event ABI, but the kernel never produces it. Adding a user-facing resize
-border would emit it; even without the border, programmatic resizes from
-`sys_window_set_bounds` should fire it for the owner.
-
-Implementation sketch:
-- After `gui_move_window` / a future `gui_resize_window`, push a
-  `GUI_EVENT_RESIZE` with the new `(w, h)` into the owner's queue.
-- Add a host test that resizes a window and asserts the owner's event
-  queue has the resize triple.
+`GUI_EVENT_RESIZE` is now produced by `gui_resize_window` (and
+therefore by `sys_window_set_bounds`) whenever the new `(w, h)`
+differs from the current window size. The event carries
+`data1 = new_w` and `data2 = new h`. The host suite's
+`test_window_abi_resize_window_updates_geometry_and_queues_event`
+verifies the round trip: pop the queue before any move, assert
+that a same-size move leaves the queue empty, then resize and
+assert the resize triple is sitting at the head.
 
 ### 5. Minimize / maximize and taskbar focus controls
 
