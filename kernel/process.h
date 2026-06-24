@@ -7,6 +7,7 @@
 
 #define PROCESS_MAX_PROCESSES    16U
 #define PROCESS_MAX_USER_REGIONS 4U
+#define PROCESS_NAME_LEN         16U
 #define PROCESS_USER_MMAP_BASE   0x0000000100000000ULL
 #define PROCESS_USER_MMAP_LIMIT  0x0000000200000000ULL
 #define PROCESS_USER_REGION_OWNED_PAGES (1ULL << 0)
@@ -29,6 +30,7 @@ typedef struct {
 typedef struct process {
     uint32_t pid;
     const char *name;
+    char name_storage[PROCESS_NAME_LEN];
     uint64_t regs[31];
     uint64_t sp;
     uint64_t pc;
