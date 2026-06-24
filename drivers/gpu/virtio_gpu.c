@@ -132,6 +132,9 @@ static virtq_used_t g_used __attribute__((aligned(4)));
 static uint16_t g_last_used_idx;
 static uint32_t g_pixels[VIRTIO_GPU_WIDTH * VIRTIO_GPU_HEIGHT]
     __attribute__((aligned(4096)));
+static uint64_t g_queue_base;
+static uint8_t g_queue_ready;
+static uint8_t g_resource_ready;
 
 static volatile uint32_t *gpu_reg(uint64_t base, uint32_t offset) {
     return (volatile uint32_t *)(uintptr_t)(base + offset);
@@ -148,6 +151,23 @@ static void gpu_barrier(void) {
 #else
     __sync_synchronize();
 #endif
+}
+
+static void gpu_init_hdr(gpu_ctrl_hdr_t *hdr, uint32_t type) {
+    hdr->type = type;
+    hdr->flags = 0;
+    hdr->fence_id = 0;
+    hdr->ctx_id = 0;
+    hdr->padding = 0;
+}
+
+static gpu_rect_t gpu_full_rect(void) {
+    gpu_rect_t rect;
+    rect.x = 0;
+    rect.y = 0;
+    rect.width = VIRTIO_GPU_WIDTH;
+    rect.height = VIRTIO_GPU_HEIGHT;
+    return rect;
 }
 
 static int virtio_gpu_probe(uint64_t base) {
@@ -274,80 +294,93 @@ static void fill_pattern(fb_t *fb, void *context) {
     fb_fillrect(fb, 180, 180, 280, 120, 0xfff0d040U);
 }
 
-int virtio_gpu_draw(uint64_t base, virtio_gpu_render_fn_t render,
-                    void *context) {
+static int gpu_ensure_ready(uint64_t base) {
+    if (g_queue_ready != 0 && g_queue_base == base) {
+        return 0;
+    }
+
+    g_queue_ready = 0;
+    g_resource_ready = 0;
+    if (gpu_init_queue(base) != 0) {
+        return -1;
+    }
+
+    g_queue_base = base;
+    g_queue_ready = 1;
+    return 0;
+}
+
+static int gpu_ensure_resource(uint64_t base, gpu_rect_t rect) {
     gpu_ctrl_hdr_t response;
     gpu_resource_create_2d_t create;
     gpu_resource_attach_backing_t attach;
     gpu_set_scanout_t scanout;
-    gpu_transfer_to_host_2d_t transfer;
-    gpu_resource_flush_t flush;
-    fb_t fb;
 
-    if (render == 0 || gpu_init_queue(base) != 0 ||
-        fb_init(&fb, g_pixels, VIRTIO_GPU_WIDTH, VIRTIO_GPU_HEIGHT,
-                VIRTIO_GPU_WIDTH) != 0) {
-        return -1;
+    if (g_resource_ready != 0) {
+        return 0;
     }
 
-    render(&fb, context);
-
-    create.hdr.type = VIRTIO_GPU_CMD_RESOURCE_CREATE_2D;
-    create.hdr.flags = 0;
-    create.hdr.fence_id = 0;
-    create.hdr.ctx_id = 0;
-    create.hdr.padding = 0;
+    gpu_init_hdr(&create.hdr, VIRTIO_GPU_CMD_RESOURCE_CREATE_2D);
     create.resource_id = VIRTIO_GPU_RESOURCE_ID;
     create.format = VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM;
     create.width = VIRTIO_GPU_WIDTH;
     create.height = VIRTIO_GPU_HEIGHT;
 
-    attach.hdr.type = VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING;
-    attach.hdr.flags = 0;
-    attach.hdr.fence_id = 0;
-    attach.hdr.ctx_id = 0;
-    attach.hdr.padding = 0;
+    gpu_init_hdr(&attach.hdr, VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING);
     attach.resource_id = VIRTIO_GPU_RESOURCE_ID;
     attach.nr_entries = 1;
     attach.entry.addr = (uint64_t)(uintptr_t)g_pixels;
     attach.entry.length = sizeof(g_pixels);
     attach.entry.padding = 0;
 
-    scanout.hdr.type = VIRTIO_GPU_CMD_SET_SCANOUT;
-    scanout.hdr.flags = 0;
-    scanout.hdr.fence_id = 0;
-    scanout.hdr.ctx_id = 0;
-    scanout.hdr.padding = 0;
-    scanout.rect.x = 0;
-    scanout.rect.y = 0;
-    scanout.rect.width = VIRTIO_GPU_WIDTH;
-    scanout.rect.height = VIRTIO_GPU_HEIGHT;
+    gpu_init_hdr(&scanout.hdr, VIRTIO_GPU_CMD_SET_SCANOUT);
+    scanout.rect = rect;
     scanout.scanout_id = 0;
     scanout.resource_id = VIRTIO_GPU_RESOURCE_ID;
 
-    transfer.hdr.type = VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D;
-    transfer.hdr.flags = 0;
-    transfer.hdr.fence_id = 0;
-    transfer.hdr.ctx_id = 0;
-    transfer.hdr.padding = 0;
-    transfer.rect = scanout.rect;
+    if (gpu_submit(base, &create, sizeof(create), &response) != 0 ||
+        gpu_submit(base, &attach, sizeof(attach), &response) != 0 ||
+        gpu_submit(base, &scanout, sizeof(scanout), &response) != 0) {
+        return -1;
+    }
+
+    g_resource_ready = 1;
+    return 0;
+}
+
+int virtio_gpu_draw(uint64_t base, virtio_gpu_render_fn_t render,
+                    void *context) {
+    gpu_ctrl_hdr_t response;
+    gpu_transfer_to_host_2d_t transfer;
+    gpu_resource_flush_t flush;
+    gpu_rect_t rect;
+    fb_t fb;
+
+    if (render == 0 || gpu_ensure_ready(base) != 0 ||
+        fb_init(&fb, g_pixels, VIRTIO_GPU_WIDTH, VIRTIO_GPU_HEIGHT,
+                VIRTIO_GPU_WIDTH) != 0) {
+        return -1;
+    }
+
+    render(&fb, context);
+    rect = gpu_full_rect();
+
+    if (gpu_ensure_resource(base, rect) != 0) {
+        return -1;
+    }
+
+    gpu_init_hdr(&transfer.hdr, VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D);
+    transfer.rect = rect;
     transfer.offset = 0;
     transfer.resource_id = VIRTIO_GPU_RESOURCE_ID;
     transfer.padding = 0;
 
-    flush.hdr.type = VIRTIO_GPU_CMD_RESOURCE_FLUSH;
-    flush.hdr.flags = 0;
-    flush.hdr.fence_id = 0;
-    flush.hdr.ctx_id = 0;
-    flush.hdr.padding = 0;
-    flush.rect = scanout.rect;
+    gpu_init_hdr(&flush.hdr, VIRTIO_GPU_CMD_RESOURCE_FLUSH);
+    flush.rect = rect;
     flush.resource_id = VIRTIO_GPU_RESOURCE_ID;
     flush.padding = 0;
 
-    if (gpu_submit(base, &create, sizeof(create), &response) != 0 ||
-        gpu_submit(base, &attach, sizeof(attach), &response) != 0 ||
-        gpu_submit(base, &scanout, sizeof(scanout), &response) != 0 ||
-        gpu_submit(base, &transfer, sizeof(transfer), &response) != 0 ||
+    if (gpu_submit(base, &transfer, sizeof(transfer), &response) != 0 ||
         gpu_submit(base, &flush, sizeof(flush), &response) != 0) {
         return -1;
     }
