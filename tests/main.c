@@ -186,6 +186,8 @@ void test_usb_find_interface_returns_null_when_no_match(void);
 void test_usb_find_interface_matches_exact_class_subclass_protocol(void);
 void test_usb_find_endpoint_in_returns_interrupt_endpoint(void);
 void test_usb_find_endpoint_in_returns_null_when_too_small(void);
+void test_pci_assign_bars_skips_already_programmed_bars(void);
+void test_pci_assign_bars_function_pointer_exists(void);
 void test_gui_draw_fills_vertical_gradient(void);
 void test_fb_init_rejects_invalid_geometry(void);
 void test_fb_putpixel_and_fillrect_clip_to_bounds(void);
@@ -387,6 +389,8 @@ int main(void) {
     RUN_TEST(test_usb_find_interface_matches_exact_class_subclass_protocol);
     RUN_TEST(test_usb_find_endpoint_in_returns_interrupt_endpoint);
     RUN_TEST(test_usb_find_endpoint_in_returns_null_when_too_small);
+    RUN_TEST(test_pci_assign_bars_skips_already_programmed_bars);
+    RUN_TEST(test_pci_assign_bars_function_pointer_exists);
     RUN_TEST(test_fb_init_rejects_invalid_geometry);
     RUN_TEST(test_fb_putpixel_and_fillrect_clip_to_bounds);
     RUN_TEST(test_fb_blit_copies_and_clips_source_pixels);

@@ -155,24 +155,41 @@ const usb_endpoint_ref_t *usb_find_endpoint_in(
     return 0;
 }
 
-/*
- * Bridge from the UHCI driver to usb_core. The UHCI driver exposes
- * a controller handle per port; usb_core calls into it through this
- * trampoline when controllers are installed. Today the trampoline
- * returns -1 because the UHCI transfer engine is not yet wired up
- * to descriptors; once uhci_control_transfer is real this becomes
- * the only path the enumeration flow needs.
- */
+/* Hold a single controller handle so usb_init + usb_port_reset can
+ * use it after the UHCI scan. */
+static uhci_controller_t *g_active_ctrl;
+
 static int uhci_xfer_trampoline(void *ctx, const usb_setup_t *setup,
                                 void *data, uint16_t data_len) {
     (void)ctx;
     (void)setup;
     (void)data;
     (void)data_len;
-    return -1;
+    if (g_active_ctrl == 0) {
+        return -1;
+    }
+    return uhci_control_transfer(g_active_ctrl, setup,
+                                 (uint8_t)sizeof(usb_setup_t),
+                                 data, data_len);
 }
 
-__attribute__((constructor))
-static void usb_core_register_default(void) {
+uint32_t usb_init(void) {
+    static uhci_controller_t controllers[2];
+    uint32_t n = uhci_pci_probe(controllers, 2);
+    if (n == 0) {
+        return 0;
+    }
+    if (uhci_init(&controllers[0]) != 0) {
+        return 0;
+    }
+    g_active_ctrl = &controllers[0];
     usb_install_controller(uhci_xfer_trampoline, 0);
+    return 1;
+}
+
+int usb_port_reset(uint8_t port_index) {
+    if (g_active_ctrl == 0) {
+        return 0;
+    }
+    return uhci_port_reset(g_active_ctrl, port_index);
 }

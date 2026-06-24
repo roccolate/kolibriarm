@@ -95,6 +95,25 @@ int board_map_mmio(uint64_t *pgd) {
                                VMM_FLAG_READ | VMM_FLAG_WRITE | VMM_FLAG_DEVICE);
     }
 
+    if (status == 0) {
+        status = vmm_map_range(pgd, QEMU_VIRT_PCIE_ECAM_BASE,
+                               QEMU_VIRT_PCIE_ECAM_BASE,
+                               QEMU_VIRT_PCIE_ECAM_SIZE,
+                               VMM_FLAG_READ | VMM_FLAG_WRITE | VMM_FLAG_DEVICE);
+    }
+    if (status != 0) {
+        uart_puts("ECAM map: failed\n");
+    } else {
+        uart_puts("ECAM map: ok\n");
+    }
+
+    if (status == 0) {
+        status = vmm_map_range(pgd, QEMU_VIRT_PCIE_MMIO_BASE,
+                               QEMU_VIRT_PCIE_MMIO_BASE,
+                               QEMU_VIRT_PCIE_MMIO_SIZE,
+                               VMM_FLAG_READ | VMM_FLAG_WRITE | VMM_FLAG_DEVICE);
+    }
+
     return status;
 }
 

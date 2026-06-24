@@ -24,6 +24,8 @@
 #include "uart/pl011.h"
 #include "input/input.h"
 #include "kernel/net/dhcp.h"
+#include "pci/pci.h"
+#include "usb/usb_core.h"
 
 extern char __kernel_end[];
 
@@ -322,6 +324,35 @@ static void init_input(void) {
     input_queue_init();
     if (board_virtio_input_init() == 0) {
         uart_puts("input: virtio-input initialized\n");
+    }
+    pci_device_t pci_devs[16];
+    uint32_t pci_n = pci_enumerate(pci_devs, 16);
+    {
+        uint32_t assigned = pci_assign_bars(pci_devs, pci_n,
+                                            0x20000000U, 0x1000U);
+        char buf[24];
+        int p = 0;
+        const char *prefix = "PCI: ";
+        for (int i = 0; prefix[i] != 0; i++) buf[p++] = prefix[i];
+        buf[p++] = '0' + (char)(pci_n / 10);
+        buf[p++] = '0' + (char)(pci_n % 10);
+        const char *mid = " devices, ";
+        for (int i = 0; mid[i] != 0; i++) buf[p++] = mid[i];
+        buf[p++] = '0' + (char)(assigned / 10);
+        buf[p++] = '0' + (char)(assigned % 10);
+        const char *suffix = " BARs assigned\n";
+        for (int i = 0; suffix[i] != 0; i++) buf[p++] = suffix[i];
+        buf[p] = 0;
+        uart_puts(buf);
+    }
+    if (usb_init() > 0) {
+        uart_puts("USB: UHCI controller initialized\n");
+        if (usb_port_reset(0) > 0) {
+            uart_puts("USB: device on port 0\n");
+        }
+        if (usb_port_reset(1) > 0) {
+            uart_puts("USB: device on port 1\n");
+        }
     }
 }
 

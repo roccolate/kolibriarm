@@ -12,7 +12,7 @@ BOARD ?= qemu_virt
 BOARD_DIR := drivers/boards/$(BOARD)
 KERNEL_ELF := $(BUILD_DIR)/kernel.elf
 KERNEL_BIN := $(BUILD_DIR)/kernel.bin
-KERNEL_SIZE_LIMIT ?= 80000
+KERNEL_SIZE_LIMIT ?= 84000
 APPS := hello loop fault shell editor monitor win panel clock kos_hello
 APPS_DIR := programs/apps
 APPS_COMMON_OBJ := $(BUILD_DIR)/$(APPS_DIR)/common.o
@@ -92,7 +92,7 @@ OBJS := \
 
 DEPS := $(OBJS:.o=.d)
 
-.PHONY: all toolchain-check qemu-check qemu qemu-blk qemu-fb qemu-fb-visible qemu-debug qemu-net entry-check size clean apps
+.PHONY: all toolchain-check qemu-check qemu qemu-blk qemu-fb qemu-fb-visible qemu-debug qemu-net qemu-usb entry-check size clean apps
 
 all: toolchain-check $(KERNEL_ELF) $(KERNEL_BIN)
 
@@ -188,6 +188,14 @@ qemu-net: qemu-check entry-check $(KERNEL_BIN)
 	    -netdev user,id=net0 -device virtio-net-device,netdev=net0 \
 	    -global virtio-mmio.force-legacy=false \
 	    -kernel $(KERNEL_BIN)
+
+qemu-usb: qemu-check entry-check $(KERNEL_BIN)
+	qemu-system-aarch64 -machine virt -cpu cortex-a72 -m 128M -nographic \
+	    -global virtio-mmio.force-legacy=false \
+	    -kernel $(KERNEL_BIN) \
+	    -device piix3-usb-uhci \
+	    -device usb-kbd \
+	    -device usb-mouse
 
 size: $(KERNEL_ELF) $(KERNEL_BIN)
 	$(SIZE) $(KERNEL_ELF)

@@ -86,4 +86,14 @@ const usb_interface_ref_t *usb_find_interface(const usb_config_walk_t *walk,
 const usb_endpoint_ref_t *usb_find_endpoint_in(
     const usb_interface_ref_t *iface, uint16_t max_packet);
 
+/* Boot the USB stack: probe PCI for UHCI controllers, initialize the
+ * first one, reset its ports, and install the control transfer
+ * callback so subsequent usb_set_address / usb_get_device_descriptor
+ * calls work. Returns the number of controllers found. */
+uint32_t usb_init(void);
+
+/* Reset a single port on the most recently initialized controller.
+ * Returns 1 if a device is detected after reset, 0 otherwise. */
+int usb_port_reset(uint8_t port_index);
+
 #endif

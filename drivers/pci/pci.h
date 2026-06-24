@@ -21,7 +21,7 @@
  * legacy registers.
  */
 
-#define PCI_ECAM_BASE       0xF0000000ULL
+#define PCI_ECAM_BASE       0x4010000000ULL
 #define PCI_ECAM_SIZE       0x01000000ULL
 #define PCI_MAX_BUSES       1U
 #define PCI_MAX_DEVICES     32U
@@ -92,6 +92,25 @@ uint8_t pci_config_read8(uint8_t bus, uint8_t device, uint8_t function,
  * built-in devices on bus 0.
  */
 uint32_t pci_enumerate(pci_device_t *out_devices, uint32_t max_devices);
+
+/* Assign MMIO BAR addresses for every enumerated device whose BAR
+ * is unimplemented (typically because QEMU's direct boot leaves
+ * them zero). Writes the assigned address back to the device and
+ * returns the number of BARs assigned. */
+uint32_t pci_assign_bars(pci_device_t *devices, uint32_t device_count,
+                         uint32_t base_address, uint32_t step);
+
+/* Write a 32-bit value to a device's config space. Used to assign
+ * BAR addresses when the firmware (or absence thereof) left them
+ * zero. */
+void pci_config_write32(uint8_t bus, uint8_t device, uint8_t function,
+                        uint8_t reg, uint32_t value);
+
+void pci_config_write16(uint8_t bus, uint8_t device, uint8_t function,
+                        uint8_t reg, uint16_t value);
+
+void pci_config_write8(uint8_t bus, uint8_t device, uint8_t function,
+                       uint8_t reg, uint8_t value);
 
 /*
  * Translate a PCI BAR value into a 64-bit MMIO base address. Type 0
