@@ -5,14 +5,8 @@
 
 #include "kernel/mm/pmm.h"
 
-#ifndef KOLIBRIARM_TEST
-#include "kernel/print.h"
-#include "uart/pl011.h"
-#endif
-
 #define KHEAP_ALIGN       16ULL
 #define KHEAP_MIN_SPLIT   32ULL
-#define KHEAP_DIAG_LARGE  65536ULL
 
 typedef struct heap_block {
     uint64_t size;
@@ -55,33 +49,6 @@ static uint64_t block_payload_capacity(uint64_t page_count) {
     return page_count * PAGE_SIZE - header_size();
 }
 
-#ifndef KOLIBRIARM_TEST
-static void kheap_diag_large_alloc(const char *tag, uint64_t size,
-                                   uint64_t pages, uint64_t addr) {
-    if (size < KHEAP_DIAG_LARGE) {
-        return;
-    }
-
-    uart_puts("kheap: ");
-    uart_puts(tag);
-    uart_puts(" size=");
-    print_dec64(size);
-    uart_puts(" pages=");
-    print_dec64(pages);
-    uart_puts(" addr=");
-    print_hex64(addr);
-    uart_puts("\n");
-}
-#else
-static void kheap_diag_large_alloc(const char *tag, uint64_t size,
-                                   uint64_t pages, uint64_t addr) {
-    (void)tag;
-    (void)size;
-    (void)pages;
-    (void)addr;
-}
-#endif
-
 static int blocks_are_adjacent(heap_block_t *left, heap_block_t *right) {
     uintptr_t left_end = (uintptr_t)left + header_size() + left->size;
 
@@ -113,13 +80,11 @@ static heap_block_t *extend_heap(uint64_t min_payload_size) {
     heap_block_t *block;
 
     if (pages == 0) {
-        kheap_diag_large_alloc("extend-invalid", min_payload_size, pages, 0);
         return NULL;
     }
 
     addr = pmm_alloc_pages(pages);
     if (addr == 0) {
-        kheap_diag_large_alloc("extend-failed", min_payload_size, pages, 0);
         return NULL;
     }
 
@@ -129,8 +94,6 @@ static heap_block_t *extend_heap(uint64_t min_payload_size) {
     block->arena_id = g_next_arena_id++;
     append_block(block);
     g_heap_total_bytes += block->size;
-
-    kheap_diag_large_alloc("extend-ok", min_payload_size, pages, addr);
 
     return block;
 }
@@ -202,15 +165,9 @@ void *kmalloc(size_t size) {
     block = g_heap_head;
     while (block != NULL) {
         if (block->free != 0 && block->size >= aligned_size) {
-            void *ptr;
-
             split_block(block, aligned_size);
             block->free = 0;
-            ptr = (void *)((uintptr_t)block + header_size());
-            kheap_diag_large_alloc("kmalloc-ok", aligned_size,
-                                   page_count_for_payload(aligned_size),
-                                   (uint64_t)(uintptr_t)ptr);
-            return ptr;
+            return (void *)((uintptr_t)block + header_size());
         }
 
         block = block->next;
@@ -218,21 +175,13 @@ void *kmalloc(size_t size) {
 
     block = extend_heap(aligned_size);
     if (block == NULL) {
-        kheap_diag_large_alloc("kmalloc-failed", aligned_size,
-                               page_count_for_payload(aligned_size), 0);
         return NULL;
     }
 
     split_block(block, aligned_size);
     block->free = 0;
 
-    {
-        void *ptr = (void *)((uintptr_t)block + header_size());
-        kheap_diag_large_alloc("kmalloc-ok", aligned_size,
-                               page_count_for_payload(aligned_size),
-                               (uint64_t)(uintptr_t)ptr);
-        return ptr;
-    }
+    return (void *)((uintptr_t)block + header_size());
 }
 
 void kfree(void *ptr) {
