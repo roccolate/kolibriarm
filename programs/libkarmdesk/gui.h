@@ -141,4 +141,22 @@ static inline long gui_window_flush(long window_id, long x, long y,
     return __syscall6(SYS_WINDOW_FLUSH, window_id, x, y, w, h, 0);
 }
 
+// gui_window_get_bounds reads the window's (x, y, w, h) into out_ptr
+// (4 x uint32_t = 16 bytes). out_ptr must point into a registered
+// user region. Only the owning process may read another process's
+// window bounds.
+static inline long gui_window_get_bounds(long window_id, void *out_ptr) {
+    return __syscall2(SYS_WINDOW_GET_BOUNDS, window_id,
+                      (long)(uintptr_t)out_ptr);
+}
+
+// gui_window_set_bounds moves and/or resizes the window in one step.
+// If the new (w, h) differs from the current size the kernel
+// reallocates the per-window backing and pushes GUI_EVENT_RESIZE
+// onto the owner's event queue so the app can rebuild its layout.
+static inline long gui_window_set_bounds(long window_id, long x, long y,
+                                         long w, long h) {
+    return __syscall6(SYS_WINDOW_SET_BOUNDS, window_id, x, y, w, h, 0);
+}
+
 #endif
