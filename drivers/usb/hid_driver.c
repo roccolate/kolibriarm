@@ -2,7 +2,9 @@
 
 #include <stdint.h>
 
+#include "input/input.h"
 #include "usb/hid.h"
+#include "usb/uhci.h"
 
 uint8_t usb_hid_init(usb_hid_state_t *state, const usb_config_walk_t *walk) {
     if (state == 0) {
@@ -132,3 +134,88 @@ uint8_t usb_hid_mouse_report(usb_hid_device_t *dev,
     dev->prev_buttons = report->buttons;
     return produced;
 }
+
+int usb_hid_poll_device(usb_hid_device_t *dev) {
+    if (dev == 0) {
+        return -1;
+    }
+    if (dev->endpoint_in == 0) {
+        return -1;
+    }
+    /* Each device has its own controller handle. The kernel
+     * initializes `dev->ctrl` to the active controller from
+     * `usb_init`; here we just call the bus driver. */
+    extern uhci_controller_t *usb_active_controller(void);
+    uhci_controller_t *ctrl = usb_active_controller();
+    if (ctrl == 0) {
+        return -1;
+    }
+    if (dev->protocol == 0x01U) {
+        hid_boot_keyboard_report_t report;
+        int n = uhci_interrupt_in(ctrl, dev->endpoint_in, &report,
+                                  sizeof(report));
+        if (n <= 0) {
+            return n;
+        }
+        input_event_t events[8];
+        uint8_t produced = usb_hid_keyboard_report(dev, &report, events, 8);
+        for (uint8_t i = 0; i < produced; i++) {
+            input_queue_push(&events[i]);
+        }
+        return (int)produced;
+    } else if (dev->protocol == 0x02U) {
+        hid_boot_mouse_report_t report;
+        int n = uhci_interrupt_in(ctrl, dev->endpoint_in, &report,
+                                  sizeof(report));
+        if (n <= 0) {
+            return n;
+        }
+        input_event_t events[4];
+        uint8_t produced = usb_hid_mouse_report(dev, &report, events, 4);
+        for (uint8_t i = 0; i < produced; i++) {
+            input_queue_push(&events[i]);
+        }
+        return (int)produced;
+    }
+    return -1;
+}
+
+usb_hid_state_t g_usb_hid_state;
+
+void usb_hid_state_reset(void) {
+    g_usb_hid_state.count = 0;
+    for (uint8_t i = 0; i < USB_HID_MAX_DEVICES; i++) {
+        for (uint8_t k = 0; k < 6; k++) {
+            g_usb_hid_state.devices[i].prev_keys[k] = HID_KEY_NONE;
+        }
+        g_usb_hid_state.devices[i].prev_buttons = 0;
+        g_usb_hid_state.devices[i].endpoint_in = 0;
+        g_usb_hid_state.devices[i].device_address = 0;
+        g_usb_hid_state.devices[i].protocol = 0;
+    }
+}
+
+int usb_hid_poll_all(void) {
+    int total = 0;
+    for (uint8_t i = 0; i < g_usb_hid_state.count; i++) {
+        int n = usb_hid_poll_device(&g_usb_hid_state.devices[i]);
+        if (n > 0) {
+            total += n;
+        }
+    }
+    return total;
+}
+
+int usb_hid_set_protocol_boot(uint8_t endpoint_in) {
+    usb_setup_t setup;
+    setup.bmRequestType = 0x21U; /* Class, Interface, Host-to-device */
+    setup.bRequest = USB_HID_SET_PROTOCOL;
+    setup.wValue = USB_HID_BOOT_PROTOCOL;
+    setup.wIndex = endpoint_in;
+    setup.wLength = 0;
+    return usb_installed_xfer(&setup, 0, 0);
+}
+
+/* Forward declaration for the xfer function (defined in usb_core.c). */
+extern int usb_installed_xfer(const usb_setup_t *setup, void *data,
+                             uint16_t data_len);

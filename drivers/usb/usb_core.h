@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 
+#include "usb/uhci.h"
 #include "usb/usb.h"
 
 /*
@@ -95,5 +96,23 @@ uint32_t usb_init(void);
 /* Reset a single port on the most recently initialized controller.
  * Returns 1 if a device is detected after reset, 0 otherwise. */
 int usb_port_reset(uint8_t port_index);
+
+/* Return the active controller (set by usb_init) so class drivers
+ * can talk to the bus. Returns NULL if no controller is up. */
+uhci_controller_t *usb_active_controller(void);
+
+/* Issue the currently installed control transfer. Exposed for HID
+ * class requests (SET_PROTOCOL, GET_REPORT) that need to bypass
+ * the standard request wrappers. */
+int usb_installed_xfer(const usb_setup_t *setup, void *data,
+                       uint16_t data_len);
+
+/* Run the standard enumeration flow on the default-address pipe:
+ * SET_ADDRESS(addr), GET_DESCRIPTOR (device), GET_DESCRIPTOR
+ * (config, full blob), and SET_CONFIGURATION(value). On success
+ * the caller can call usb_hid_init with the populated walk. */
+int usb_enumerate_default_device(uint8_t address, uint8_t config_value,
+                                 void *buffer, uint16_t buffer_len,
+                                 usb_config_walk_t *out);
 
 #endif

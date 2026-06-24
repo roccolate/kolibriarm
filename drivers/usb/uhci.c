@@ -333,9 +333,85 @@ int uhci_control_transfer(uhci_controller_t *ctrl, const void *setup,
 
 int uhci_interrupt_in(uhci_controller_t *ctrl, uint8_t endpoint,
                       void *buf, uint16_t buf_size) {
-    (void)ctrl;
-    (void)endpoint;
-    (void)buf;
-    (void)buf_size;
-    return -1;
+    if (ctrl == 0 || ctrl->priv_index >= 2U) {
+        return -1;
+    }
+    if (buf == 0 || buf_size == 0) {
+        return -1;
+    }
+    uint32_t idx = ctrl->priv_index;
+    uhci_priv_t *priv = &g_priv[idx];
+    if (priv->in_xfer) {
+        return -1;
+    }
+    priv->in_xfer = 1;
+
+    td_reset_pool(idx);
+
+    if (buf_size > 64U) {
+        buf_size = 64U;
+    }
+
+    uhci_td_t *in_td = td_alloc(idx);
+    uhci_td_t *status_td = td_alloc(idx);
+    if (in_td == 0 || status_td == 0) {
+        priv->in_xfer = 0;
+        return -1;
+    }
+
+    /* IN TD: target the device's interrupt endpoint with data
+     * toggle 1 (the device toggles on its own; the host mirrors
+     * the toggle on every successful transaction). The buffer is
+     * the private xfer_buffer. */
+    in_td->link = td_phys(status_td);
+    in_td->status = UHCI_TD_ACTIVE_BIT | UHCI_TD_ERR_COUNT_MASK | 3U;
+    in_td->token = td_make_token(UHCI_PID_IN, ctrl->device_addr, endpoint,
+                                 1, buf_size);
+    in_td->buffer = (uint32_t)(uintptr_t)priv->xfer_buffer;
+
+    /* STATUS TD: OUT handshake back to the device. The toggle for
+     * STATUS is always 1. */
+    status_td->link = UHCI_PTR_TERM;
+    status_td->status = UHCI_TD_ACTIVE_BIT | UHCI_TD_ERR_COUNT_MASK | 3U |
+                        UHCI_TD_IOC;
+    status_td->token = td_make_token(UHCI_PID_OUT, ctrl->device_addr,
+                                     endpoint, 1, 0);
+    status_td->buffer = 0;
+
+    uhci_link_frame(idx, 0, in_td);
+    uhci_link_frame(idx, 1, status_td);
+
+    uint16_t cmd = uhci_reg16(ctrl->mmio_base, UHCI_REG_CMD);
+    if ((cmd & UHCI_CMD_RS) == 0) {
+        uhci_write16(ctrl->mmio_base, UHCI_REG_CMD, cmd | UHCI_CMD_RS);
+    }
+
+    int rc = uhci_wait_td(status_td, 1000000U);
+    if (rc < 0) {
+        uhci_unlink_frames(idx, 0, 2);
+        td_reset_pool(idx);
+        priv->in_xfer = 0;
+        return -1;
+    }
+    if ((status_td->status & (UHCI_TD_BITSTUFF | UHCI_TD_CRC | UHCI_TD_NAK |
+                              UHCI_TD_BABBLE | UHCI_TD_DBUFFER |
+                              UHCI_TD_STALLED)) != 0U) {
+        uhci_unlink_frames(idx, 0, 2);
+        td_reset_pool(idx);
+        priv->in_xfer = 0;
+        return -1;
+    }
+    /* The actual length lives in the IN TD's status field after a
+     * successful transfer. */
+    uint16_t actual = (uint16_t)(in_td->status & 0x7FFU);
+    if (actual > buf_size) {
+        actual = buf_size;
+    }
+    for (uint16_t i = 0; i < actual; i++) {
+        ((uint8_t *)buf)[i] = priv->xfer_buffer[i];
+    }
+    uhci_unlink_frames(idx, 0, 2);
+    td_reset_pool(idx);
+    priv->in_xfer = 0;
+    return (int)actual;
 }

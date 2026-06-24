@@ -25,6 +25,7 @@
 #include "input/input.h"
 #include "kernel/net/dhcp.h"
 #include "pci/pci.h"
+#include "usb/hid_driver.h"
 #include "usb/usb_core.h"
 
 extern char __kernel_end[];
@@ -39,6 +40,7 @@ static void console_input_thread(void *arg) {
     for (;;) {
         input_uart_poll();
         board_virtio_input_poll();
+        usb_hid_poll_all();
 
         input_event_t event;
         while (input_queue_poll(&event) == 0) {
@@ -346,12 +348,37 @@ static void init_input(void) {
         uart_puts(buf);
     }
     if (usb_init() > 0) {
-        uart_puts("USB: UHCI controller initialized\n");
+        uart_puts("USB: controller initialized\n");
         if (usb_port_reset(0) > 0) {
             uart_puts("USB: device on port 0\n");
         }
         if (usb_port_reset(1) > 0) {
             uart_puts("USB: device on port 1\n");
+        }
+        /* Try to enumerate the first device at the default address.
+         * The HID driver will register any boot-protocol devices it
+         * finds, and the input thread will then poll them. */
+        uint8_t config_buf[256];
+        usb_config_walk_t walk;
+        if (usb_enumerate_default_device(1, 1, config_buf,
+                                         sizeof(config_buf), &walk) == 0) {
+            uart_puts("USB: enumeration ok\n");
+            usb_hid_state_reset();
+            uint8_t hid_count = usb_hid_init(&g_usb_hid_state, &walk);
+            if (hid_count > 0) {
+                uart_puts("USB HID: ");
+                uart_putc('0' + (char)hid_count);
+                uart_puts(" devices\n");
+                for (uint8_t i = 0; i < g_usb_hid_state.count; i++) {
+                    g_usb_hid_state.devices[i].device_address = 1;
+                    usb_hid_set_protocol_boot(
+                        g_usb_hid_state.devices[i].endpoint_in);
+                }
+            } else {
+                uart_puts("USB HID: no boot-protocol devices\n");
+            }
+        } else {
+            uart_puts("USB: enumeration skipped\n");
         }
     }
 }

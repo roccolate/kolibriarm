@@ -50,6 +50,37 @@ int usb_set_configuration(uint8_t value) {
     return xfer(&setup, 0, 0);
 }
 
+int usb_installed_xfer(const usb_setup_t *setup, void *data,
+                       uint16_t data_len) {
+    return xfer(setup, data, data_len);
+}
+
+int usb_enumerate_default_device(uint8_t address, uint8_t config_value,
+                                 void *buffer, uint16_t buffer_len,
+                                 usb_config_walk_t *out) {
+    if (buffer == 0 || out == 0) {
+        return -1;
+    }
+    /* Step 1: SET_ADDRESS on the default-address pipe. */
+    if (usb_set_address(address) < 0) {
+        return -1;
+    }
+    /* Step 2: GET_DESCRIPTOR (device, 8-byte minimum). */
+    usb_device_descriptor_t dev;
+    if (usb_get_device_descriptor(&dev) < 0) {
+        return -1;
+    }
+    /* Step 3: GET_DESCRIPTOR (configuration, full blob). */
+    if (usb_get_config_descriptor(0, buffer, buffer_len, out) < 0) {
+        return -1;
+    }
+    /* Step 4: SET_CONFIGURATION. */
+    if (usb_set_configuration(config_value) < 0) {
+        return -1;
+    }
+    return 0;
+}
+
 int usb_walk_configuration(const void *buffer, uint16_t buffer_len,
                            usb_config_walk_t *out) {
     if (buffer == 0 || out == 0 || buffer_len < 4U) {
@@ -158,6 +189,10 @@ const usb_endpoint_ref_t *usb_find_endpoint_in(
 /* Hold a single controller handle so usb_init + usb_port_reset can
  * use it after the UHCI scan. */
 static uhci_controller_t *g_active_ctrl;
+
+uhci_controller_t *usb_active_controller(void) {
+    return g_active_ctrl;
+}
 
 static int uhci_xfer_trampoline(void *ctx, const usb_setup_t *setup,
                                 void *data, uint16_t data_len) {

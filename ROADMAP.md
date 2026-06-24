@@ -240,16 +240,17 @@ candidates, in rough order of return on effort:
   smaller-footprint alternative once a single huge backing proves
   too costly.
 - **USB HID foundations (done).** `drivers/pci/` walks the ECAM at
-  0xF0000000 and decodes BARs; `drivers/usb/hid.{c,h}` parses boot
+  0x4010000000 and decodes BARs; `drivers/usb/hid.{c,h}` parses boot
   reports (8-byte keyboard, 3-byte mouse); `drivers/usb/usb_core.{c,h}`
   walks configuration descriptors and exposes standard requests;
   `drivers/usb/uhci.{c,h}` defines the registers and a static
   frame list / TD pool. The boot-protocol translator
   (`usb_hid_keyboard_report`, `usb_hid_mouse_report`) converts
   reports into `input_event_t` and feeds the same `input_queue` the
-  UART and virtio-input use. Unit tests cover descriptors, parser,
-  and translator; live enumeration still needs a working
-  `uhci_control_transfer` (the next step).
+  UART and virtio-input use. Live enumeration reaches "USB:
+  controller initialized" and "USB: device on port 0/1" on the
+  qemu-xhci path; full HID event delivery needs a UHCI controller
+  with MMIO BARs (QEMU virt's `piix3-usb-uhci` is I/O-only).
 - USB HID keyboard and mouse drivers, so the QEMU UART input is no longer the
   primary path.
 - SMP: enable the secondary cores after the uniprocessor desktop is stable.

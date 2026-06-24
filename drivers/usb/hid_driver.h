@@ -58,4 +58,28 @@ uint8_t usb_hid_mouse_report(usb_hid_device_t *dev,
                              const hid_boot_mouse_report_t *report,
                              input_event_t *out, uint8_t out_len);
 
+/* Read the next pending report from a HID device's interrupt-in
+ * endpoint. Parses the report and pushes the resulting events
+ * into the global input queue. Returns the number of events
+ * pushed, 0 if no report was pending, or -1 on error. */
+int usb_hid_poll_device(usb_hid_device_t *dev);
+
+/* Kernel-wide HID state: holds the registered devices after
+ * enumeration. Exposed so the input thread can poll everything
+ * in a single call. */
+extern usb_hid_state_t g_usb_hid_state;
+
+/* Poll every registered HID device. Pushes the resulting events
+ * into the global input queue. Returns the total number of events
+ * pushed. */
+int usb_hid_poll_all(void);
+
+/* Reset the kernel-wide HID state. */
+void usb_hid_state_reset(void);
+
+/* Send HID SET_PROTOCOL=0 (boot) to a HID device. The endpoint
+ * parameter is the device's interrupt-in endpoint number (the
+ * function uses it as wIndex in the class request). */
+int usb_hid_set_protocol_boot(uint8_t endpoint_in);
+
 #endif
