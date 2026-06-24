@@ -820,7 +820,7 @@ panel_labels:
     .ascii "fault\0\0\0\0\0"
     .ascii "shell\0\0\0\0\0"
     .ascii "editor\0\0\0\0"
-    .ascii "monitor\0\0\0\0"
+    .ascii "monitor\0\0\0"
     .ascii "win\0\0\0\0\0\0\0"
     .ascii "clock\0\0\0\0\0"
 panel_image_end:
