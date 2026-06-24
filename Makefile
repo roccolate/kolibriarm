@@ -23,6 +23,16 @@ APP_BLOBS := $(addprefix $(BUILD_DIR)/$(APPS_DIR)/,$(addsuffix _blob.o,$(APPS)))
 VIRTIO_BLK_IMG := $(BUILD_DIR)/virtio-blk.img
 MKFAT32_IMAGE := $(BUILD_DIR)/tools/mkfat32_image
 
+# programs/libkarm — userland support library (syscall wrappers, crt0,
+# string helpers). The window/compositor wrappers in
+# programs/libkarmdesk are built only after every app is on libkarm;
+# their objects are intentionally not part of LIBKARM_OBJS yet.
+LIBKARM_DIR := programs/libkarm
+LIBKARM_OBJS := \
+    $(BUILD_DIR)/$(LIBKARM_DIR)/syscall.o \
+    $(BUILD_DIR)/$(LIBKARM_DIR)/crt0.o \
+    $(BUILD_DIR)/$(LIBKARM_DIR)/string.o
+
 LOAD_ADDR := 0x40080000
 LOAD_ADDR_HEX := 40080000
 LDFLAGS := -T linker.ld -nostdlib
@@ -41,6 +51,11 @@ ASFLAGS := -Wall -Wextra -ffreestanding -nostdlib -nostartfiles -mcpu=cortex-a72
 CFLAGS  := -Wall -Wextra -Werror -ffreestanding -nostdlib -nostartfiles \
            -fno-builtin -fno-stack-protector -mgeneral-regs-only \
            -mcpu=cortex-a72 -std=c11 -Os -g -I . -I drivers
+# Userland C compiles with the same flags plus the libkarm include path
+# so app code can pull in <syscall.h>, <errno.h>, <string.h> from its
+# own build unit without an explicit relative include.
+USERLAND_CFLAGS := $(CFLAGS) -I $(LIBKARM_DIR)
+USERLAND_ASFLAGS := $(ASFLAGS) -I $(LIBKARM_DIR)
 
 OBJS := \
     $(BUILD_DIR)/boot/start.o \
@@ -92,11 +107,17 @@ OBJS := \
 
 DEPS := $(OBJS:.o=.d)
 
-.PHONY: all toolchain-check qemu-check qemu qemu-blk qemu-fb qemu-fb-visible qemu-debug qemu-net qemu-usb entry-check size clean apps
+.PHONY: all toolchain-check qemu-check qemu qemu-blk qemu-fb qemu-fb-visible qemu-debug qemu-net qemu-usb entry-check size clean apps libkarm
 
 all: toolchain-check $(KERNEL_ELF) $(KERNEL_BIN)
 
 apps: $(APP_ELFS) $(APP_BINS)
+
+# libkarm is built standalone so its objects can be linked into any
+# userland app that has been migrated. Until an app's Makefile rule
+# is updated to depend on $(LIBKARM_OBJS), the app still links
+# against programs/apps/common.o and uses inline `svc #0`.
+libkarm: $(LIBKARM_OBJS)
 
 toolchain-check:
 	@command -v $(CC) >/dev/null 2>&1 || { echo "error: missing $(CC)"; exit 1; }
@@ -123,6 +144,17 @@ $(BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
 $(BUILD_DIR)/$(APPS_DIR)/%.o: $(APPS_DIR)/%.S | $(BUILD_DIR)
 	mkdir -p $(dir $@)
 	$(CC) $(DEPFLAGS) $(ASFLAGS) -c $< -o $@
+
+# programs/libkarm — userland support library. These rules override the
+# generic `$(BUILD_DIR)/%.o` patterns so userland code gets the
+# USERLAND_* flags (which add programs/libkarm to the include path).
+$(BUILD_DIR)/$(LIBKARM_DIR)/%.o: $(LIBKARM_DIR)/%.S | $(BUILD_DIR)
+	mkdir -p $(dir $@)
+	$(CC) $(DEPFLAGS) $(USERLAND_ASFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/$(LIBKARM_DIR)/%.o: $(LIBKARM_DIR)/%.c | $(BUILD_DIR)
+	mkdir -p $(dir $@)
+	$(CC) $(DEPFLAGS) $(USERLAND_CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/$(APPS_DIR)/%.elf: $(BUILD_DIR)/$(APPS_DIR)/%.o $(APPS_COMMON_OBJ) $(APPS_DIR)/image.ld
 	$(LD) -T $(APPS_DIR)/image.ld -nostdlib \
