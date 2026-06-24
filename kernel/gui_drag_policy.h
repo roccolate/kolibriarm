@@ -7,6 +7,7 @@
  * the window-manager/input policy without a broad gui.c rewrite.
  */
 #pragma weak gui_drag_start
+#pragma weak gui_focus_window
 #pragma weak gui_window_push_event
 
 #endif
