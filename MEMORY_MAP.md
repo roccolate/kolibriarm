@@ -79,6 +79,31 @@ active page tables used by the QEMU bootstrap and EL0 demo runner.
 The user address space top is `0x0000_7FFF_FFFF_FFFF` (canonical 48-bit limit).
 The kernel never touches TTBR0 of another process.
 
+#### Isolation contract
+
+Every EL0 process owns its own page table installed in `TTBR0_EL1` via
+`process_set_page_table` (`kernel/process.h`). Each `process_t` keeps
+up to `PROCESS_MAX_USER_REGIONS` (default 4) disjoint regions in
+`process->user_regions[]`. The kernel's user-region list is
+**per-process**: a region registered by process A is invisible to
+`process_user_range_contains` when called on process B. The full
+contract is documented in SYSCALLS.md "Memory Isolation Contract" and
+pinned by `tests/test_process_isolation.c` and
+`tests/test_syscall_abi.c`.
+
+Key invariants:
+
+- The same virtual address can be handed to two processes by
+  `sys_mmap`. Each process resolves it through its own page table, so
+  the backing physical pages differ.
+- A pointer that crosses a region boundary is rejected with
+  `ERR_INVAL` before the kernel reads or writes it.
+- A query with `size == 0` is always satisfied. Callers can validate
+  a base pointer before computing a length.
+- Image and stack regions are added by the loader and are not
+  user-mutable through `sys_mmap`/`sys_munmap`.
+- A null `process_t` pointer never satisfies the range check.
+
 ---
 
 ## Stack Layout

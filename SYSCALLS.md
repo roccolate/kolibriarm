@@ -67,18 +67,18 @@ Current limitations:
   current process page table, and records process-owned metadata.
 - `hint` must be `0`.
 - `flags=0` maps readable/writable anonymous memory.
-- `PROT_READ`, `PROT_WRITE`, and `PROT_EXEC` are supported. `MAP_SHARED` and
-  `MAP_FIXED` are reserved but rejected today.
+- `USER_VM_PROT_READ`, `USER_VM_PROT_WRITE`, and `USER_VM_PROT_EXEC` are
+  supported. `MAP_SHARED` and `MAP_FIXED` are reserved but rejected today.
 - `sys_munmap` requires an exact owned `sys_mmap` region match. Image and stack
   regions cannot be unmapped through this syscall yet.
 
-`mmap` protection/map flags:
+`mmap` protection/map flags (`kernel/user_vm.h`):
 ```
-0x01  PROT_READ
-0x02  PROT_WRITE
-0x04  PROT_EXEC
-0x10  MAP_SHARED    reserved, not implemented
-0x20  MAP_FIXED     reserved, not implemented
+0x01  USER_VM_PROT_READ
+0x02  USER_VM_PROT_WRITE
+0x04  USER_VM_PROT_EXEC
+0x10  MAP_SHARED        reserved, not implemented
+0x20  MAP_FIXED         reserved, not implemented
 ```
 
 ### I/O
@@ -203,6 +203,65 @@ Current limitations:
 | -5 | `ERR_BADF` | Bad file descriptor |
 | -7 | `ERR_INVAL` | Invalid argument |
 | -11 | `ERR_AGAIN` | Try again later |
+
+### Memory Isolation Contract
+
+Every syscall that takes a user pointer validates the caller's registered
+user regions before reading or writing it. The contract is enforced by
+`process_user_range_contains(process_current(), start, size)` in
+`kernel/syscall.c` and pinned by `tests/test_syscall_abi.c` and
+`tests/test_process_isolation.c`.
+
+- Each process owns up to `PROCESS_MAX_USER_REGIONS` (`kernel/process.h`,
+  default 4) disjoint regions.
+- The kernel's user-region list is per-process. A region registered by
+  process A is invisible to `process_user_range_contains` when called on
+  process B.
+- `sys_mmap` and `sys_munmap` operate only on the current process's
+  regions. Each process's `next_user_vaddr` is private, so two processes
+  can both receive the same virtual address from `sys_mmap` and the
+  pages they back live in independent page tables.
+- Image and stack regions are added by the loader and are not user-mutable
+  through `sys_mmap`/`sys_munmap`.
+- A user pointer that crosses a region boundary is rejected with
+  `ERR_INVAL`. The boundary check treats `size == 0` as a vacuous query
+  that is always satisfied; this matters for callers that validate a
+  pointer before computing a length.
+- A null `process_t` pointer never satisfies the range check.
+
+### GUI / Window-Manager ABI
+
+The kernel exposes the desktop as a per-process set of windows. The
+contract below is enforced by `kernel/gui.c` and pinned by
+`tests/test_window_abi.c`.
+
+- Every window carries one `owner_pid`. `gui_window_t.owner_pid ==
+  GUI_NO_OWNER` (`0xffffffff`) marks a kernel-owned window and is the
+  only owner value `sys_window_for_pid` skips.
+- `sys_window_create` and `sys_window_destroy` are owner-only: a process
+  cannot draw into or destroy a window it does not own.
+- `sys_window_focus` and `sys_window_for_pid` are intentionally
+  callable from any pid. The panel taskbar uses them to raise a
+  different pid's window.
+- `gui_event_t` is a packed 12-byte triple: `uint32_t type,
+  int32_t data1, int32_t data2` (4 bytes each). The width and the
+  order are part of the ABI; apps size their event buffers as
+  `count * sizeof(gui_event_t)`.
+- Event type IDs are frozen: `1=KEY_PRESS, 2=KEY_RELEASE,
+  3=MOUSE_CLICK, 4=MOUSE_MOVE, 5=RESIZE, 6=CLOSE`. Reordering them
+  silently breaks every windowed app.
+- `sys_window_focus` raises a window by bumping its `z` field. Window
+  pool indices stay stable; z-order changes never move window structs.
+- `GUI_WINDOW_NO_FOCUS` keeps the focus machinery from selecting the
+  window. Dock/taskbar windows set this.
+- `GUI_WINDOW_NO_DRAG` and `GUI_WINDOW_SKIP_TASKBAR` are reserved
+  flags that the current kernel respects in their respective lookups.
+- A window whose owner has exited (`state == ZOMBIE` or `UNUSED`)
+  stays on the desktop. A title-bar close click on an ownerless
+  window destroys it; on a live owner it queues `GUI_EVENT_CLOSE`.
+- The compositor keeps a coalesced damage-rectangle list (cap 32 with a
+  "full" sentinel). Owner draws land in a per-window backing buffer,
+  so dragging or z-order changes carry the content with the window.
 
 ### System Info
 
