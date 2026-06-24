@@ -23,6 +23,7 @@
 #define SYS_WINDOW_DRAW_RECT 73
 #define SYS_WINDOW_DRAW_TEXT 72
 #define SYS_WINDOW_REDRAW    76
+#define SYS_WINDOW_FLUSH      80
 #define SYS_WINDOW_EVENT     74
 #define SYS_WINDOW_DESTROY  71
 #define SYS_WINDOW_FOCUS     77
@@ -36,9 +37,14 @@
 .equ PANEL_Y,       (SCREEN_H - PANEL_H)        // 424
 .equ BTN_H,         24
 .equ BTN_Y,         (PANEL_Y + 4)               // 428
-.equ BTN_W,         80
-.equ BTN_GAP,       8
+// 8 launchers must fit in 640 px with a 4 px left margin:
+//   4 + 8*BTN_W + 7*BTN_GAP == 640 -> BTN_W=76, BTN_GAP=4
+.equ BTN_W,         76
+.equ BTN_GAP,       4
 .equ BTN_COUNT,     8
+.equ BTN_ROW_W,     (BTN_COUNT * BTN_W + (BTN_COUNT - 1) * BTN_GAP)
+.equ PANEL_CONTENT_W, SCREEN_W
+.equ PANEL_CONTENT_H, (PANEL_H - 0)
 
 // Running-apps row sits below the buttons. RUN_ROW_Y is panel-local.
 .equ RUN_ROW_Y,     32
@@ -306,9 +312,14 @@ panel_btn_done:
 
     bl panel_redraw_running
 
-    // Trigger redraw.
+    // Flush the full panel content. The kernel-owned title bar sits
+    // above content y=0; everything below is owned by this app.
     mov x0, x19
-    mov x8, #SYS_WINDOW_REDRAW
+    mov x1, #0
+    mov x2, #0
+    mov x3, #PANEL_CONTENT_W
+    mov x4, #PANEL_CONTENT_H
+    mov x8, #SYS_WINDOW_FLUSH
     svc #0
 
     ldp x29, x30, [sp], #16
@@ -580,8 +591,14 @@ panel_refresh_skip:
 
 panel_refresh_done:
     bl panel_redraw_running
+    // Flush the running-apps row only; the launcher button row is
+    // unchanged so the kernel does not repaint it.
     mov x0, x19
-    mov x8, #SYS_WINDOW_REDRAW
+    mov x1, #0
+    mov x2, #RUN_ROW_Y
+    mov x3, #PANEL_CONTENT_W
+    mov x4, #RUN_ROW_H
+    mov x8, #SYS_WINDOW_FLUSH
     svc #0
 
 panel_refresh_running_done:
@@ -765,9 +782,16 @@ panel_on_move:
     mov x1, #1
     bl panel_redraw_button
 3:
-    // Push the repaint to the framebuffer.
+    // Flush just the launcher button row. panel_redraw_button above
+    // touched at most two buttons (old hover + new hover), so repainting
+    // the whole row keeps the rect tight without forcing the full
+    // desktop sentinel.
     mov x0, x19
-    mov x8, #SYS_WINDOW_REDRAW
+    mov x1, #0
+    mov x2, #(BTN_Y - PANEL_Y)
+    mov x3, #BTN_ROW_W
+    mov x4, #BTN_H
+    mov x8, #SYS_WINDOW_FLUSH
     svc #0
 9:
     ldp x29, x30, [sp], #16

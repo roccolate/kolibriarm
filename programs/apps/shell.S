@@ -23,6 +23,7 @@
 #define SYS_WINDOW_EVENT     74
 #define SYS_WINDOW_SET_TITLE 75
 #define SYS_WINDOW_REDRAW    76
+#define SYS_WINDOW_FLUSH      80
 
 // Synthetic key codes delivered through the GUI event queue when the
 // user presses arrow keys in a real terminal attached to the QEMU
@@ -747,8 +748,15 @@ shell_redraw:
     adr x4, shell_footer
     bl shell_draw_text
 
+    // Flush the shell content rect. The title bar is owned by the
+    // kernel so we start at y=0 below the 12 px title. Content-local
+    // flush keeps a keystroke from repainting the rest of the desktop.
     mov x0, x19
-    mov x8, #SYS_WINDOW_REDRAW
+    mov x1, #0
+    mov x2, #0
+    mov x3, #WIN_W
+    mov x4, #(WIN_H - TITLE_BAR_H)
+    mov x8, #SYS_WINDOW_FLUSH
     svc #0
 
     ldp x29, x30, [sp], #16

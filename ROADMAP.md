@@ -81,12 +81,11 @@ assembly syscalls with a tiny userland library later.
   the first screenful is drawn.
 - The monitor owns a window and draws a compact `sys_proclist`/`sys_meminfo`
   view, but it still has only the simplest fixed layout.
-- Live app redraws go through `SYS_WINDOW_FLUSH` (80) per window. Editor,
-  clock, and monitor push the content rect through the per-rect
-  compositor path; the partial-redraw branch in `gui_draw` is now
-  exercised in production, not just in the host suite. The shell and
-  the panel still use `SYS_WINDOW_REDRAW` (76) because their state
-  changes are global (focus, launcher, running-app entry).
+- Live app redraws go through `SYS_WINDOW_FLUSH` (80). Editor, clock,
+  monitor, shell, and the panel each push the smallest content-local
+  rect that covers their last batch of draws; the partial-redraw
+  branch in `gui_draw` is exercised in production, not just in the
+  host suite.
 - Resize is defined in the event ABI but not produced. Minimize/maximize and
   taskbar-owned focus controls are not implemented.
 - Phase 8 (RPi 4 port) builds but has never been booted on hardware.
@@ -244,10 +243,11 @@ Exit criteria:
 - [x] Damage-rectangle tracking. The compositor keeps a coalesced damage
       list (cap 32, with a "full" sentinel that short-circuits further
       adds) and `gui_draw` walks the list so each redraw only repaints
-      the regions that actually changed. Editor, clock, and monitor
-      push content-local damage through `SYS_WINDOW_FLUSH` (80); the
-      strict tests in `tests/test_gui.c` cover the in-rect fill, the
-      off-screen no-op, and multiple disjoint rects in a single draw.
+      the regions that actually changed. Editor, clock, monitor, shell,
+      and the panel push content-local damage through `SYS_WINDOW_FLUSH`
+      (80); the strict tests in `tests/test_gui.c` cover the in-rect
+      fill, the off-screen no-op, and multiple disjoint rects in a
+      single draw.
 
 ---
 
@@ -276,12 +276,13 @@ criteria only become true when a windowed session runs end to end.
 
 ### B. Switch app redraws to the per-rect path — done
 
-`programs/apps/{editor,clock,monitor}.S` now call `SYS_WINDOW_FLUSH`
-(80) for their content redraws. The shell and panel still use
-`SYS_WINDOW_REDRAW` (76) because their redraws cover global state
-(focus, launcher, running-app entry) where the content-local rect
-would miss parts of the desktop. Strict partial-redraw tests in
-`tests/test_gui.c` (`test_gui_damage_partial_repaint_paints_every_pixel_in_rect`,
+`programs/apps/{editor,clock,monitor,shell,panel}.S` now call
+`SYS_WINDOW_FLUSH` (80) for their content redraws. The shell flushes
+its full content area on each redraw so a keystroke does not repaint
+the rest of the desktop; the panel flushes just the button row on
+hover changes and just the running-apps row on proclist refreshes.
+Strict partial-redraw tests in `tests/test_gui.c`
+(`test_gui_damage_partial_repaint_paints_every_pixel_in_rect`,
 `test_gui_damage_partial_repaint_skips_when_rect_outside_fb`,
 `test_gui_damage_partial_repaint_with_multiple_disjoint_rects`) cover
 the in-rect fill, the off-screen no-op, and multiple disjoint rects
@@ -353,12 +354,13 @@ candidates, in rough order of return on effort:
   full HID event delivery needs a UHCI controller with MMIO BARs
   (QEMU virt's `piix3-usb-uhci` is I/O-only, which is the next gap to
   close).
-- **Switch apps to per-rect redraws (done).** Editor, clock, and
-  monitor now push their content rect through `SYS_WINDOW_FLUSH` (80)
-  so the partial `gui_draw` path is exercised in practice. The shell
-  and panel still call `SYS_WINDOW_REDRAW` (76) because their redraws
-  cover global state (focus, launcher, running-app entry) where the
-  content-local rect would miss parts of the desktop.
+- **Switch apps to per-rect redraws (done).** Editor, clock, monitor,
+  shell, and the panel each push the smallest content-local rect that
+  covers their last batch of draws through `SYS_WINDOW_FLUSH` (80). The
+  shell flushes its full content area on each redraw so a keystroke
+  does not repaint the rest of the desktop; the panel flushes just the
+  button row on hover changes and just the running-apps row on
+  proclist refreshes.
 - **Remove the embedded user demo (done).** `kernel/user_demo.{c,h}`
   has been renamed to `kernel/panel_boot.{c,h}`. `kernel_main` boots
   the panel process registered through bootfs; there is no embedded
