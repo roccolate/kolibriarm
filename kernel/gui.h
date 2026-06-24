@@ -157,6 +157,8 @@ int gui_set_window_title(gui_desktop_t *desktop, uint32_t window_id,
                          const char *title);
 int gui_set_window_title_bar(gui_desktop_t *desktop, uint32_t window_id,
                              uint32_t title_h);
+int gui_set_window_flags(gui_desktop_t *desktop, uint32_t window_id,
+                         uint32_t flags);
 int gui_window_draw_text(gui_desktop_t *desktop, uint32_t window_id,
                          int32_t x, int32_t y, const char *text,
                          uint32_t color);
