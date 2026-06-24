@@ -69,7 +69,11 @@
 // currently over (-1 for none). The panel_on_move updates it on
 // transitions and repaints the two affected buttons.
 .equ OFF_HOVER,      (OFF_YIELD_CTR + 8)     // 392
-.equ FRAME_BYTES,    (OFF_HOVER + 16)        // 408, round up
+// Store panel_pid in the frame instead of a callee-saved register. Event
+// handling and redraw helpers freely use x25, so keeping pid in x25 made
+// the running-apps filter fragile and caused the panel to list itself.
+.equ OFF_PANEL_PID,  (OFF_HOVER + 8)         // 400
+.equ FRAME_BYTES,    (OFF_PANEL_PID + 16)    // 416, round up
 
 // Colors (BGRA in little-endian: 0xAABBGGRR).
 .equ COL_BG,         0xff202428
@@ -116,6 +120,11 @@ panel_start:
     sub x10, x10, #1
     cbnz x10, 1b
 
+    // Initialize scalar frame state that is read by redraw/poll helpers.
+    str xzr, [sp, #OFF_YIELD_CTR]
+    mov w9, #-1
+    str w9, [sp, #OFF_HOVER]
+
     mov x0, #1
     adr x1, panel_banner
     bl common_write_cstr
@@ -139,7 +148,7 @@ panel_start:
     // Cache our own pid so we can filter ourselves out of sys_proclist.
     mov x8, #SYS_GETPID
     svc #0
-    mov x25, x0                         // x25 = panel_pid
+    str x0, [sp, #OFF_PANEL_PID]
 
     bl panel_redraw_all
 
@@ -178,11 +187,11 @@ panel_loop:
     mul x23, x23, x24
     add x24, x20, x23
 
-    ldr w25, [x24]                      // type
+    ldr w28, [x24]                      // type
     ldr w26, [x24, #4]                  // data1
     ldr w27, [x24, #8]                  // data2
 
-    cmp w25, #3                         // GUI_EVENT_MOUSE_CLICK
+    cmp w28, #3                         // GUI_EVENT_MOUSE_CLICK
     b.ne 2f
     // data1 = abs x, data2 = abs y; convert to panel-local.
     sub w26, w26, #0                    // panel is at x=0
@@ -191,7 +200,7 @@ panel_loop:
     b 9f
 
 2:
-    cmp w25, #4                         // GUI_EVENT_MOUSE_MOVE
+    cmp w28, #4                         // GUI_EVENT_MOUSE_MOVE
     b.ne 9f
     sub w26, w26, #0
     sub w27, w27, #PANEL_Y
@@ -269,7 +278,7 @@ panel_btn_loop:
     b.ge panel_btn_done
 
     // Is this button currently the hovered one?
-    ldr w9, [sp, #OFF_HOVER]
+    ldr w9, [sp, #16 + OFF_HOVER]
     cmp w26, w9
     b.ne panel_btn_no_hover
     mov w10, #1                         // w10 = hovered
@@ -412,9 +421,7 @@ panel_run_slot_loop:
     ldr x11, [x10]
     cbz x11, 2f
 
-    // Build the name buffer pointer (callee-saved x25 holds panel_pid
-    // in panel_poll; here we use it as a scratch slot to hand the
-    // pointer to panel_strlen without trusting x10 across a bl).
+    // Build the name buffer pointer and hand it to panel_strlen.
     add x25, x28, #OFF_RUNNING + (RUN_SLOT_COUNT * RUNNING_STRIDE)
     mov x12, #16
     mul x12, x12, x26
@@ -510,6 +517,7 @@ panel_refresh_running:
     b.le panel_refresh_running_done      // 0 or negative => nothing to do
 
     mov x22, x0                         // x22 = n entries
+    ldr w20, [x28, #OFF_PANEL_PID]      // w20 = panel_pid
 
     // Walk proclist entries, skipping panel_pid. The first RUN_SLOT_COUNT
     // non-self entries populate the running-apps table.
@@ -527,7 +535,7 @@ panel_refresh_loop:
     add x9, x9, x10                     // x9 = &entry
     ldr w11, [x9]                       // entry.pid
     mov w21, w11                        // preserve pid across SVC
-    cmp w11, w25
+    cmp w11, w20
     b.eq panel_refresh_skip              // skip self
     cbz w11, panel_refresh_skip          // skip empty slots
 
