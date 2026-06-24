@@ -81,6 +81,15 @@ int input_queue_poll(input_event_t *event) {
     return 0;
 }
 
+int input_queue_peek(input_event_t *event) {
+    if (g_event_count == 0) {
+        return -1;
+    }
+
+    *event = g_event_queue[g_event_head];
+    return 0;
+}
+
 int input_queue_poll_char(void) {
     input_event_t event;
 

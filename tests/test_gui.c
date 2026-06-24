@@ -1199,3 +1199,325 @@ void test_gui_backing_buffer_reallocates_when_window_reused(void) {
     TEST_ASSERT_EQUAL_UINT64(0xff112233U, window->backing[1]);
     TEST_ASSERT_EQUAL_UINT64(0xff112233U, window->backing[6]);
 }
+
+/*
+ * Damage-tracking tests. These exercise the per-rect path that the
+ * partial-redraw branch of gui_draw uses, so a regression in coalescing,
+ * clipping, or the full-sentinel fallback is caught by the host suite
+ * before it reaches the QEMU run.
+ */
+
+void test_gui_damage_init_queues_full_sentinel(void) {
+    uint32_t pixels[32 * 24];
+    fb_t fb;
+    gui_desktop_t desktop;
+
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)fb_init(&fb, pixels, 32, 24, 32));
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)gui_init(&desktop, &fb, 0xff101010U));
+    /* gui_init marks the desktop as fully damaged so the first draw
+     * paints the gradient even before any window exists. */
+    TEST_ASSERT_EQUAL_UINT64(1U, desktop.damage_full);
+    TEST_ASSERT_EQUAL_UINT64(0U, desktop.damage_count);
+}
+
+void test_gui_damage_add_clips_to_framebuffer(void) {
+    uint32_t pixels[32 * 24];
+    fb_t fb;
+    gui_desktop_t desktop;
+
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)fb_init(&fb, pixels, 32, 24, 32));
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)gui_init(&desktop, &fb, 0xff101010U));
+    /* Drop the initial full sentinel so we exercise the partial path. */
+    gui_damage_clear(&desktop);
+
+    gui_damage_add(&desktop, 0, 0, 4, 4);
+    TEST_ASSERT_EQUAL_UINT64(0U, desktop.damage_full);
+    TEST_ASSERT_EQUAL_UINT64(1U, desktop.damage_count);
+    /* Fully outside the framebuffer: dropped. */
+    gui_damage_add(&desktop, 100, 100, 4, 4);
+    TEST_ASSERT_EQUAL_UINT64(1U, desktop.damage_count);
+    /* Partly outside: clipped to the framebuffer edge. */
+    gui_damage_add(&desktop, 30, 20, 10, 10);
+    TEST_ASSERT_EQUAL_UINT64(2U, desktop.damage_count);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(uint32_t)30,
+                             (uint64_t)(uint32_t)desktop.damage_rects[1].x);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(uint32_t)20,
+                             (uint64_t)(uint32_t)desktop.damage_rects[1].y);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(uint32_t)2,
+                             (uint64_t)(uint32_t)desktop.damage_rects[1].w);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(uint32_t)4,
+                             (uint64_t)(uint32_t)desktop.damage_rects[1].h);
+    /* Zero-area rects are dropped. */
+    gui_damage_add(&desktop, 0, 0, 0, 4);
+    gui_damage_add(&desktop, 0, 0, 4, 0);
+    TEST_ASSERT_EQUAL_UINT64(2U, desktop.damage_count);
+}
+
+void test_gui_damage_add_merges_overlapping_rects(void) {
+    uint32_t pixels[32 * 24];
+    fb_t fb;
+    gui_desktop_t desktop;
+
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)fb_init(&fb, pixels, 32, 24, 32));
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)gui_init(&desktop, &fb, 0xff101010U));
+    gui_damage_clear(&desktop);
+
+    gui_damage_add(&desktop, 0, 0, 8, 8);
+    gui_damage_add(&desktop, 4, 4, 8, 8);
+    TEST_ASSERT_EQUAL_UINT64(1U, desktop.damage_count);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(uint32_t)0,
+                             (uint64_t)(uint32_t)desktop.damage_rects[0].x);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(uint32_t)0,
+                             (uint64_t)(uint32_t)desktop.damage_rects[0].y);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(uint32_t)12,
+                             (uint64_t)(uint32_t)desktop.damage_rects[0].w);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(uint32_t)12,
+                             (uint64_t)(uint32_t)desktop.damage_rects[0].h);
+
+    /* Adjacent (touching) rects also merge so we do not pay for two
+     * full-row fillrects on the same band. */
+    gui_damage_add(&desktop, 12, 0, 4, 4);
+    TEST_ASSERT_EQUAL_UINT64(1U, desktop.damage_count);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(uint32_t)16,
+                             (uint64_t)(uint32_t)desktop.damage_rects[0].w);
+}
+
+void test_gui_damage_add_full_collapses_to_sentinel(void) {
+    uint32_t pixels[32 * 24];
+    fb_t fb;
+    gui_desktop_t desktop;
+
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)fb_init(&fb, pixels, 32, 24, 32));
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)gui_init(&desktop, &fb, 0xff101010U));
+    gui_damage_clear(&desktop);
+
+    /* A rect that covers the full framebuffer collapses to the sentinel
+     * and short-circuits any further adds until the next clear. */
+    gui_damage_add(&desktop, 0, 0, 32, 24);
+    TEST_ASSERT_EQUAL_UINT64(1U, desktop.damage_full);
+    TEST_ASSERT_EQUAL_UINT64(0U, desktop.damage_count);
+
+    gui_damage_add(&desktop, 0, 0, 4, 4);
+    TEST_ASSERT_EQUAL_UINT64(1U, desktop.damage_full);
+    TEST_ASSERT_EQUAL_UINT64(0U, desktop.damage_count);
+}
+
+void test_gui_damage_overflow_collapses_to_sentinel(void) {
+    uint32_t pixels[64 * 64];
+    fb_t fb;
+    gui_desktop_t desktop;
+
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)fb_init(&fb, pixels, 64, 64, 64));
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)gui_init(&desktop, &fb, 0xff101010U));
+    gui_damage_clear(&desktop);
+
+    /* Push more non-overlapping rects than the list can hold. The list
+     * collapses to "full" so the next draw degrades to a full repaint
+     * instead of overflowing. */
+    for (uint32_t i = 0; i < GUI_DAMAGE_MAX + 4U; i++) {
+        uint32_t x = (i * 7U) % 60U;
+        uint32_t y = (i * 5U) % 60U;
+        gui_damage_add(&desktop, (int32_t)x, (int32_t)y, 2, 2);
+    }
+    TEST_ASSERT_EQUAL_UINT64(1U, desktop.damage_full);
+    TEST_ASSERT_EQUAL_UINT64(0U, desktop.damage_count);
+}
+
+void test_gui_damage_draw_text_pushes_tight_rect(void) {
+    uint32_t pixels[64] = { 0 };
+    fb_t fb;
+    gui_desktop_t desktop;
+    uint32_t window_id;
+
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)fb_init(&fb, pixels, 8, 8, 8));
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)gui_init(&desktop, &fb, 0xff101010U));
+    desktop.cursor.visible = 0;
+    /* Drop the initial full sentinel so we can inspect the rect added
+     * by a single draw call. */
+    gui_damage_clear(&desktop);
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_create_window(
+                                 &desktop, 1, 1, 5, 5, 0xff000000U,
+                                 0xffffffffU, &window_id));
+    /* The window create itself adds a rect; clear it so we only see the
+     * one the upcoming draw_text will queue. */
+    gui_damage_clear(&desktop);
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_window_draw_text(
+                                 &desktop, window_id, 0, 0, "ab",
+                                 0xffffffffU));
+    TEST_ASSERT_EQUAL_UINT64(1U, desktop.damage_count);
+    /* Tight text rect: window (1,1) + title_h 0 + content (0,0). The
+     * text is 16 px wide and 8 px tall, but the window is 5x5, so the
+     * rect is clipped to the window's right and bottom edges. */
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(uint32_t)1,
+                             (uint64_t)(uint32_t)desktop.damage_rects[0].x);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(uint32_t)1,
+                             (uint64_t)(uint32_t)desktop.damage_rects[0].y);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(uint32_t)5,
+                             (uint64_t)(uint32_t)desktop.damage_rects[0].w);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(uint32_t)5,
+                             (uint64_t)(uint32_t)desktop.damage_rects[0].h);
+}
+
+void test_gui_damage_draw_rect_pushes_content_rect(void) {
+    uint32_t pixels[64] = { 0 };
+    fb_t fb;
+    gui_desktop_t desktop;
+    uint32_t window_id;
+
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)fb_init(&fb, pixels, 8, 8, 8));
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)gui_init(&desktop, &fb, 0xff101010U));
+    desktop.cursor.visible = 0;
+    gui_damage_clear(&desktop);
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_create_window(
+                                 &desktop, 2, 2, 4, 4, 0xff000000U,
+                                 0xffffffffU, &window_id));
+    gui_damage_clear(&desktop);
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_window_draw_rect(
+                                 &desktop, window_id, 1, 1, 2, 2, 0xffff0000U));
+    TEST_ASSERT_EQUAL_UINT64(1U, desktop.damage_count);
+    /* Content (1,1,2,2) inside window (2,2,4,4): framebuffer (3,3,2,2). */
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(uint32_t)3,
+                             (uint64_t)(uint32_t)desktop.damage_rects[0].x);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(uint32_t)3,
+                             (uint64_t)(uint32_t)desktop.damage_rects[0].y);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(uint32_t)2,
+                             (uint64_t)(uint32_t)desktop.damage_rects[0].w);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(uint32_t)2,
+                             (uint64_t)(uint32_t)desktop.damage_rects[0].h);
+}
+
+void test_gui_damage_title_bar_offset_in_draw_text(void) {
+    uint32_t pixels[64] = { 0 };
+    fb_t fb;
+    gui_desktop_t desktop;
+    uint32_t window_id;
+
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)fb_init(&fb, pixels, 8, 8, 8));
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)gui_init(&desktop, &fb, 0xff101010U));
+    desktop.cursor.visible = 0;
+    gui_damage_clear(&desktop);
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_create_window(
+                                 &desktop, 1, 1, 5, 5, 0xff000000U,
+                                 0xffffffffU, &window_id));
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_set_window_title_bar(
+                                 &desktop, window_id, 2U));
+    gui_damage_clear(&desktop);
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_window_draw_text(
+                                 &desktop, window_id, 0, 0, "x",
+                                 0xffffffffU));
+    /* Content (0,0) below a 2-px title bar at window y=1: framebuffer y=3. */
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(uint32_t)1,
+                             (uint64_t)(uint32_t)desktop.damage_rects[0].x);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(uint32_t)3,
+                             (uint64_t)(uint32_t)desktop.damage_rects[0].y);
+}
+
+void test_gui_damage_move_pushes_union_rect(void) {
+    uint32_t pixels[64] = { 0 };
+    fb_t fb;
+    gui_desktop_t desktop;
+    uint32_t window_id;
+
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)fb_init(&fb, pixels, 16, 16, 16));
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)gui_init(&desktop, &fb, 0xff101010U));
+    desktop.cursor.visible = 0;
+    gui_damage_clear(&desktop);
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_create_window(
+                                 &desktop, 0, 0, 4, 4, 0xff000000U,
+                                 0xffffffffU, &window_id));
+    gui_damage_clear(&desktop);
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_move_window(&desktop, window_id,
+                                                       4, 0));
+    /* Old rect (0,0,4,4) and new rect (4,0,4,4): union (0,0,8,4). */
+    TEST_ASSERT_EQUAL_UINT64(1U, desktop.damage_count);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(uint32_t)0,
+                             (uint64_t)(uint32_t)desktop.damage_rects[0].x);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(uint32_t)0,
+                             (uint64_t)(uint32_t)desktop.damage_rects[0].y);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(uint32_t)8,
+                             (uint64_t)(uint32_t)desktop.damage_rects[0].w);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(uint32_t)4,
+                             (uint64_t)(uint32_t)desktop.damage_rects[0].h);
+}
+
+void test_gui_damage_partial_repaint_leaves_pixels_outside_rect(void) {
+    /*
+     * With a small damage rect and no windows, gui_draw must only
+     * touch the gradient pixels in that rect. The compositor walks the
+     * window list in z-order, so a regression that always repaints
+     * the entire framebuffer (or that swallows the damage list and
+     * does nothing) fails here.
+     */
+    uint32_t pixels[16 * 16];
+    fb_t fb;
+    gui_desktop_t desktop;
+
+    for (uint32_t i = 0; i < 16 * 16; i++) {
+        pixels[i] = 0xff777777U;
+    }
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)fb_init(&fb, pixels, 16, 16, 16));
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)gui_init(&desktop, &fb, 0xff101010U));
+    desktop.cursor.visible = 0;
+    /* Drop the initial full sentinel so the upcoming draw only repaints
+     * what we explicitly damage. */
+    gui_damage_clear(&desktop);
+
+    /* Mark a tiny rect (0,0)-(1,1) and run the partial draw. */
+    gui_damage_add(&desktop, 0, 0, 1, 1);
+    gui_draw(&desktop);
+
+    /* Pixel inside the dirty rect was repainted by the gradient. */
+    TEST_ASSERT_TRUE(pixels[0] != 0xff777777U);
+    /* Pixels outside the dirty rect keep the pre-draw value, including
+     * the immediately adjacent cells (right and below) and the
+     * opposite corner. */
+    TEST_ASSERT_EQUAL_UINT64(0xff777777U, pixels[1]);
+    TEST_ASSERT_EQUAL_UINT64(0xff777777U, pixels[16]);
+    TEST_ASSERT_EQUAL_UINT64(0xff777777U, pixels[15 * 16 + 15]);
+}
+
+void test_gui_damage_full_sentinel_re_paints_everything(void) {
+    uint32_t pixels[16 * 16];
+    fb_t fb;
+    gui_desktop_t desktop;
+    uint32_t window_id;
+
+    for (uint32_t i = 0; i < 16 * 16; i++) {
+        pixels[i] = 0xff777777U;
+    }
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)fb_init(&fb, pixels, 16, 16, 16));
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)gui_init(&desktop, &fb, 0xff101010U));
+    desktop.cursor.visible = 0;
+    gui_damage_clear(&desktop);
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_create_window(
+                                 &desktop, 0, 0, 4, 4, 0xff000000U,
+                                 0xffffffffU, &window_id));
+    gui_damage_clear(&desktop);
+
+    /* Collapse to full: next gui_draw must repaint the whole fb. */
+    gui_damage_add_full(&desktop);
+    gui_draw(&desktop);
+
+    /* The corner pixel that the partial-path test leaves untouched
+     * here is repainted by the gradient. */
+    TEST_ASSERT_TRUE(pixels[0] != 0xff777777U);
+}

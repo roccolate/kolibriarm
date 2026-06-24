@@ -155,6 +155,7 @@ Current limitations:
 | 77 | `sys_window_focus` | `x0=window_id` | 0 / error | Raise/focus a window by id (callable from any pid, not just the owner) |
 | 78 | `sys_window_for_pid` | `x0=owner_pid, x1=index` | window id / `ERR_NOENT` | Return the index-th window owned by the given pid, or `ERR_NOENT` when none |
 | 79 | `sys_cursor_set_shape` | `x0=shape` | 0 / error | Request the global cursor shape (`0=arrow`, `1=hand`) |
+| 80 | `sys_window_flush` | `x0=window_id, x1=x, x2=y, x3=w, x4=h` | 0 / error | Push a content-local damage rect; the compositor partial-redraws only that region |
 
 Current limitations:
 - These syscalls are the early desktop ABI, not a stable long-term ABI.
@@ -186,8 +187,12 @@ Current limitations:
   updates cursor shape itself over kernel title decorations; EL0-drawn
   controls such as panel launcher buttons can request `GUI_CURSOR_HAND`
   while hovered and `GUI_CURSOR_ARROW` when the hover leaves.
-- Drawing still writes through the current kernel framebuffer path; there is no
-  per-window backing buffer or explicit flush rectangle yet.
+- Drawing writes through per-window backing buffers; the compositor walks
+  the per-framebuffer damage list on each redraw and only repaints the
+  rectangles the window funcs (or `sys_window_flush`) have queued. Owner
+  draws land in the backing buffer; a `sys_window_flush` call is only
+  needed for content the owner mutated through a kernel-bypassing path
+  (e.g. by mapping the backing into another process).
 
 ### Error Codes Implemented Today
 
@@ -287,7 +292,6 @@ Planned but not implemented yet:
 | `sys_window_get_bounds` | Read current window bounds |
 | `sys_window_set_bounds` | Move and/or resize a window |
 | `sys_window_show` / `sys_window_hide` | Toggle visibility |
-| `sys_window_flush` | Flush an explicit dirty rectangle |
 | `sys_draw_line` | Draw a clipped line in a window |
 | `sys_draw_bitmap` | Blit a bitmap into a window |
 | `sys_draw_get_text_metrics` | Measure text before drawing |
@@ -311,12 +315,12 @@ typedef struct {
 
 | # | Name | Args | Returns | Description |
 |---|------|------|---------|-------------|
-| 80 | `sys_msg_send` | `x0=pid, x1=buf, x2=len` | 0 / error | Send message to process |
-| 81 | `sys_msg_recv` | `x0=buf, x1=maxlen` | len / error | Receive next message |
-| 82 | `sys_shm_create` | `x0=size` | shmid | Create shared memory region |
-| 83 | `sys_shm_map` | `x0=shmid` | vaddr | Map shared region into this process |
-| 84 | `sys_shm_unmap` | `x0=shmid` | 0 / error | Unmap shared region |
-| 85 | `sys_shm_destroy` | `x0=shmid` | 0 / error | Destroy shared region |
+| 90 | `sys_msg_send` | `x0=pid, x1=buf, x2=len` | 0 / error | Send message to process |
+| 91 | `sys_msg_recv` | `x0=buf, x1=maxlen` | len / error | Receive next message |
+| 92 | `sys_shm_create` | `x0=size` | shmid | Create shared memory region |
+| 93 | `sys_shm_map` | `x0=shmid` | vaddr | Map shared region into this process |
+| 94 | `sys_shm_unmap` | `x0=shmid` | 0 / error | Unmap shared region |
+| 95 | `sys_shm_destroy` | `x0=shmid` | 0 / error | Destroy shared region |
 
 ### Planned System Info Extensions
 

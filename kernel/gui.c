@@ -294,6 +294,11 @@ int gui_init(gui_desktop_t *desktop, fb_t *fb, uint32_t background_color) {
     desktop->cursor.shape = GUI_CURSOR_ARROW;
     desktop->damage_count = 0;
     desktop->damage_full = 0;
+    /* Fresh framebuffer: queue a full repaint so the first gui_draw
+     * after init paints the gradient. Without this the desktop would
+     * stay at whatever the framebuffer happened to contain until a
+     * window or input event added the first damage rect. */
+    desktop->damage_full = 1;
     for (uint32_t i = 0; i < GUI_MAX_WINDOWS; i++) {
         desktop->windows[i].x = 0;
         desktop->windows[i].y = 0;
@@ -1524,5 +1529,9 @@ void gui_init_for_framebuffer(fb_t *fb, void *context) {
      * look like a demo instead of a real desktop; the alpha rule is to
      * leave the surface empty until the panel paints. */
     gui_draw(&g_gui_desktop);
+    /* Drop the full-desktop damage sentinel that gui_init set, so the
+     * panel's first sys_window_create records a tight per-window rect
+     * instead of being swallowed by the "full" sentinel. */
+    gui_damage_clear(&g_gui_desktop);
     g_gui_active = 1;
 }

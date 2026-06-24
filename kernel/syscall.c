@@ -47,6 +47,7 @@
 #define SYS_WINDOW_FOCUS     77ULL
 #define SYS_WINDOW_FOR_PID   78ULL
 #define SYS_CURSOR_SET_SHAPE 79ULL
+#define SYS_WINDOW_FLUSH     80ULL
 #define SYS_TIMEINFO 100ULL
 #define SYS_MEMINFO 101ULL
 #define SYS_PROCLIST 102ULL
@@ -681,6 +682,43 @@ static int64_t sys_cursor_set_shape(process_t *process, uint64_t shape) {
     return 0;
 }
 
+/*
+ * sys_window_flush: push a content-local damage rectangle for the given
+ * window. The compositor converts it to framebuffer coordinates and
+ * merges it with other pending damage, so a flurry of small draws
+ * coalesces into one partial redraw. Used by apps that draw into their
+ * own backing buffer through a path the kernel does not see (for
+ * example, blitting an image they built locally) and need to tell the
+ * compositor which pixels changed.
+ */
+static int64_t sys_window_flush(process_t *process, uint64_t window_id,
+                                uint64_t x, uint64_t y, uint64_t w,
+                                uint64_t h) {
+    if (process == 0 || window_id >= GUI_MAX_WINDOWS ||
+        x > 0x7fffffffULL || y > 0x7fffffffULL ||
+        w > 0xffffffffULL || h > 0xffffffffULL) {
+        return ERR_INVAL;
+    }
+    gui_desktop_t *desktop = gui_desktop();
+    if (desktop == 0) {
+        return ERR_AGAIN;
+    }
+    gui_window_t *window = &desktop->windows[window_id];
+    if (window->used == 0 || window->owner_pid != process->pid) {
+        return ERR_BADF;
+    }
+    if (w == 0 || h == 0) {
+        return 0;
+    }
+    /* Convert content-local coords to framebuffer coords: the content
+     * area sits below the kernel-drawn title bar. */
+    gui_damage_add(desktop,
+                   (int32_t)window->x + (int32_t)x,
+                   (int32_t)window->y + (int32_t)window->title_h + (int32_t)y,
+                   (int32_t)w, (int32_t)h);
+    return 0;
+}
+
 static int64_t sys_window_event(process_t *process, exception_frame_t *frame,
                                uint64_t window_id, uint64_t buf_ptr,
                                uint64_t buf_count) {
@@ -892,6 +930,11 @@ void syscall_dispatch(exception_frame_t *frame) {
         break;
     case SYS_CURSOR_SET_SHAPE:
         frame->x[0] = (uint64_t)sys_cursor_set_shape(current, frame->x[0]);
+        break;
+    case SYS_WINDOW_FLUSH:
+        frame->x[0] = (uint64_t)sys_window_flush(current, frame->x[0],
+                                                 frame->x[1], frame->x[2],
+                                                 frame->x[3], frame->x[4]);
         break;
     case SYS_TIMEINFO:
         frame->x[0] = (uint64_t)sys_timeinfo(frame->x[0]);

@@ -46,6 +46,12 @@ typedef struct {
 void input_queue_init(void);
 int input_queue_push(const input_event_t *event);
 int input_queue_poll(input_event_t *event);
+/* Peek at the next event without removing it. Returns 0 and fills
+ * `event` on success, or -1 if the queue is empty. The caller can
+ * decide whether to pop the event with input_queue_poll. The peek
+ * and the pop are not atomic; if another consumer drains the
+ * queue in between, input_queue_poll will return -1. */
+int input_queue_peek(input_event_t *event);
 int input_queue_poll_char(void);
 int input_queue_available(void);
 

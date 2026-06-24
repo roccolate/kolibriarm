@@ -42,11 +42,17 @@ static void console_input_thread(void *arg) {
         board_virtio_input_poll();
         usb_hid_poll_all();
 
+        /* The shell only consumes KEY_PRESS. Use peek so we do not
+         * pop MOUSE_MOVE / MOUSE_BUTTON events out from under the
+         * GUI input thread; those stay in the queue for poll_input_events. */
         input_event_t event;
-        while (input_queue_poll(&event) == 0) {
+        while (input_queue_peek(&event) == 0) {
             if (event.type == INPUT_EVENT_KEY_PRESS) {
+                (void)input_queue_poll(&event);
                 char c = (char)event.data.key.key;
                 console_poll_char(c);
+            } else {
+                break;
             }
         }
 

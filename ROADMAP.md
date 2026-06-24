@@ -69,8 +69,12 @@ assembly syscalls with a tiny userland library later.
   first screenful is drawn.
 - The monitor owns a window and draws a compact `sys_proclist`/`sys_meminfo`
   view, but it still has only the simplest fixed layout.
-- Window redraw is still whole-desktop and demo-level; there are no per-window
-  backing buffers or damage rectangles yet.
+- Window redraw is damage-tracked at the framebuffer level: the
+  compositor keeps a coalesced damage list (cap 32, with a "full"
+  sentinel) and `gui_draw` only repaints the regions that have changed
+  since the last clear. Per-window backing buffers hold the content; the
+  per-rect list is the next step's optimization once the larger
+  one-screen cost proves too high.
 - Resize is defined in the event ABI but not produced. Minimize/maximize and
   taskbar-owned focus controls are not implemented.
 - Phase 8 (RPi 4 port) builds but has never been booted on hardware.
@@ -220,6 +224,14 @@ Exit criteria:
       `INPUT_KEY_UP/DOWN/LEFT/RIGHT` events (`drivers/input/input.c`);
       the shell keeps a depth-8 command history ring and lets the user
       walk back through it with Up/Down.
+- [x] Damage-rectangle tracking. The compositor keeps a coalesced damage
+      list (cap 32, with a "full" sentinel that short-circuits further
+      adds) and `gui_draw` walks the list so each redraw only repaints
+      the regions that actually changed. `sys_window_flush` (syscall 80)
+      lets EL0 apps push a content-local dirty rect, which the kernel
+      converts to framebuffer coordinates. Planned IPC numbers shifted
+      from 80-89 to 90-99 to keep the live GUI calls in a single
+      contiguous range.
 
 ---
 
