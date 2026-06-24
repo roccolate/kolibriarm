@@ -201,6 +201,20 @@ $(BUILD_DIR)/$(APPS_DIR)/monitor.elf: $(BUILD_DIR)/$(APPS_DIR)/monitor.o \
 	    $(BUILD_DIR)/$(APPS_DIR)/monitor_end.o \
 	    -o $@
 
+$(BUILD_DIR)/$(APPS_DIR)/editor.elf: $(BUILD_DIR)/$(APPS_DIR)/editor.o \
+    $(BUILD_DIR)/$(APPS_DIR)/editor_header.o \
+    $(BUILD_DIR)/$(LIBKARM_DIR)/syscall.o \
+    $(BUILD_DIR)/$(LIBKARM_DIR)/crt0.o \
+    $(BUILD_DIR)/$(APPS_DIR)/editor_end.o \
+    $(APPS_DIR)/image.ld
+	$(LD) -T $(APPS_DIR)/image.ld -nostdlib \
+	    $(BUILD_DIR)/$(APPS_DIR)/editor.o \
+	    $(BUILD_DIR)/$(APPS_DIR)/editor_header.o \
+	    $(BUILD_DIR)/$(LIBKARM_DIR)/syscall.o \
+	    $(BUILD_DIR)/$(LIBKARM_DIR)/crt0.o \
+	    $(BUILD_DIR)/$(APPS_DIR)/editor_end.o \
+	    -o $@
+
 $(BUILD_DIR)/$(APPS_DIR)/%.elf: $(BUILD_DIR)/$(APPS_DIR)/%.o $(APPS_COMMON_OBJ) $(APPS_DIR)/image.ld
 	$(LD) -T $(APPS_DIR)/image.ld -nostdlib \
 	    $(BUILD_DIR)/$(APPS_DIR)/$*.o $(APPS_COMMON_OBJ) -o $@
