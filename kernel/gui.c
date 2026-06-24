@@ -152,11 +152,25 @@ void gui_set_cursor(gui_desktop_t *desktop, int32_t x, int32_t y) {
     if ((uint32_t)y >= desktop->fb->height) {
         y = (int32_t)desktop->fb->height - 1;
     }
-    desktop->cursor.prev_x = desktop->cursor.x;
-    desktop->cursor.prev_y = desktop->cursor.y;
+    int32_t prev_x = desktop->cursor.x;
+    int32_t prev_y = desktop->cursor.y;
+    desktop->cursor.prev_x = prev_x;
+    desktop->cursor.prev_y = prev_y;
     desktop->cursor.x = x;
     desktop->cursor.y = y;
     gui_refresh_cursor_shape(desktop);
+    /* Damage the union of the old and new cursor rectangles so the
+     * compositor redraws both the previous and current positions. The
+     * 16x16 cursor bitmap is small; one merged rect is enough. */
+    int32_t ux0 = prev_x < x ? prev_x : x;
+    int32_t uy0 = prev_y < y ? prev_y : y;
+    int32_t ux1 = (prev_x + (int32_t)GUI_CURSOR_W) > (x + (int32_t)GUI_CURSOR_W)
+                      ? (prev_x + (int32_t)GUI_CURSOR_W)
+                      : (x + (int32_t)GUI_CURSOR_W);
+    int32_t uy1 = (prev_y + (int32_t)GUI_CURSOR_H) > (y + (int32_t)GUI_CURSOR_H)
+                      ? (prev_y + (int32_t)GUI_CURSOR_H)
+                      : (y + (int32_t)GUI_CURSOR_H);
+    gui_damage_add(desktop, ux0, uy0, ux1 - ux0, uy1 - uy0);
 }
 
 void gui_cursor_move(gui_desktop_t *desktop, int32_t dx, int32_t dy) {
@@ -183,6 +197,7 @@ void gui_drag_update(gui_desktop_t *desktop, int32_t cursor_x,
     gui_window_t *window;
     int32_t new_x;
     int32_t new_y;
+    int32_t old_x, old_y, old_w, old_h;
 
     if (desktop == 0 || desktop->drag_window_id == GUI_NO_WINDOW) {
         return;
@@ -204,9 +219,24 @@ void gui_drag_update(gui_desktop_t *desktop, int32_t cursor_x,
     if (new_y < 0) {
         new_y = 0;
     }
+    old_x = (int32_t)window->x;
+    old_y = (int32_t)window->y;
+    old_w = (int32_t)window->w;
+    old_h = (int32_t)window->h;
     window->x = (uint32_t)new_x;
     window->y = (uint32_t)new_y;
     gui_refresh_cursor_shape(desktop);
+    /* Drag: damage the union of the old and new window rects so the
+     * gradient and any windows underneath repaint at both positions. */
+    int32_t new_x1 = new_x + old_w;
+    int32_t new_y1 = new_y + old_h;
+    int32_t old_x1 = old_x + old_w;
+    int32_t old_y1 = old_y + old_h;
+    int32_t ux0 = old_x < new_x ? old_x : new_x;
+    int32_t uy0 = old_y < new_y ? old_y : new_y;
+    int32_t ux1 = old_x1 > new_x1 ? old_x1 : new_x1;
+    int32_t uy1 = old_y1 > new_y1 ? old_y1 : new_y1;
+    gui_damage_add(desktop, ux0, uy0, ux1 - ux0, uy1 - uy0);
 }
 
 void gui_drag_end(gui_desktop_t *desktop) {
@@ -431,6 +461,10 @@ int gui_create_window_for_pid(gui_desktop_t *desktop, uint32_t owner_pid,
                 *window_id = i;
             }
             gui_refresh_cursor_shape(desktop);
+            /* New window appears: invalidate its full rect (title bar
+             * plus content) so the next compositor pass paints it. */
+            gui_damage_add(desktop, (int32_t)window->x, (int32_t)window->y,
+                           (int32_t)window->w, (int32_t)window->h);
             return 0;
         }
     }
@@ -444,6 +478,12 @@ int gui_destroy_window(gui_desktop_t *desktop, uint32_t window_id) {
         return -1;
     }
     gui_window_t *window = &desktop->windows[window_id];
+    /* Capture the bounding rect before zeroing the window so the
+     * compositor repaints the region the window occupied. */
+    int32_t dx = (int32_t)window->x;
+    int32_t dy = (int32_t)window->y;
+    int32_t dw = (int32_t)window->w;
+    int32_t dh = (int32_t)window->h;
     gui_window_free_backing(window);
     window->x = 0;
     window->y = 0;
@@ -472,6 +512,9 @@ int gui_destroy_window(gui_desktop_t *desktop, uint32_t window_id) {
         }
     }
     gui_refresh_cursor_shape(desktop);
+    /* Repaint the area the window used to occupy so the desktop gradient
+     * and any windows underneath show through. */
+    gui_damage_add(desktop, dx, dy, dw, dh);
     return 0;
 }
 
@@ -496,6 +539,12 @@ int gui_set_window_title(gui_desktop_t *desktop, uint32_t window_id,
         window->title[j] = title[j];
     }
     gui_refresh_cursor_shape(desktop);
+    /* Only the title bar pixels change; the rest of the window is
+     * unaffected. Dirty just the bar so the next redraw is small. */
+    if (window->title_h > 0U) {
+        gui_damage_add(desktop, (int32_t)window->x, (int32_t)window->y,
+                       (int32_t)window->w, (int32_t)window->title_h);
+    }
     return 0;
 }
 
@@ -513,8 +562,14 @@ int gui_set_window_title_bar(gui_desktop_t *desktop, uint32_t window_id,
     if (title_h >= window->h) {
         return -1;
     }
+    uint32_t old_title_h = window->title_h;
     window->title_h = title_h;
     gui_refresh_cursor_shape(desktop);
+    /* Title bar height changed: dirty the whole window so the bar
+     * relayouts and any content that moved gets re-blitted. */
+    (void)old_title_h;
+    gui_damage_add(desktop, (int32_t)window->x, (int32_t)window->y,
+                   (int32_t)window->w, (int32_t)window->h);
     return 0;
 }
 
@@ -553,7 +608,25 @@ int gui_window_draw_text(gui_desktop_t *desktop, uint32_t window_id,
     }
     fb_t fb = backing_fb_for(window);
     font_draw_text(&fb, (uint32_t)x, (uint32_t)y, text, color);
-    gui_request_redraw();
+    /*
+     * Push a tight damage rect that covers the rendered text. The width
+     * uses font_text_width so a short line does not invalidate the
+     * whole row. Y is clipped to content_h; the y+GLYPH_HEIGHT band can
+     * be slightly larger than content (descender) but is still well
+     * below full-screen.
+     */
+    uint32_t text_w = font_text_width(text);
+    int32_t dx = (int32_t)window->x + x;
+    int32_t dy = (int32_t)window->y + (int32_t)window->title_h + y;
+    int32_t dw = (int32_t)text_w;
+    int32_t dh = (int32_t)FONT_GLYPH_HEIGHT;
+    if (dx + dw > (int32_t)(window->x + window->w)) {
+        dw = (int32_t)(window->x + window->w) - dx;
+    }
+    if (dy + dh > (int32_t)(window->y + window->h)) {
+        dh = (int32_t)(window->y + window->h) - dy;
+    }
+    gui_damage_add(desktop, dx, dy, dw, dh);
     return 0;
 }
 
@@ -599,7 +672,11 @@ int gui_window_draw_rect(gui_desktop_t *desktop, uint32_t window_id,
     fb_t fb = backing_fb_for(window);
     fb_fillrect(&fb, (uint32_t)x0, (uint32_t)y0,
                 (uint32_t)(x1 - x0), (uint32_t)(y1 - y0), color);
-    gui_request_redraw();
+    /* Push the content rect as damage in framebuffer coords. */
+    gui_damage_add(desktop,
+                   (int32_t)window->x + x0,
+                   (int32_t)window->y + (int32_t)window->title_h + y0,
+                   x1 - x0, y1 - y0);
     return 0;
 }
 
@@ -619,7 +696,11 @@ int gui_window_clear(gui_desktop_t *desktop, uint32_t window_id,
                              : 0U;
     fb_t fb = backing_fb_for(window);
     fb_fillrect(&fb, 0, 0, window->w, content_h, color);
-    gui_request_redraw();
+    /* Clear invalidates the entire content area below the title bar. */
+    gui_damage_add(desktop,
+                   (int32_t)window->x,
+                   (int32_t)window->y + (int32_t)window->title_h,
+                   (int32_t)window->w, (int32_t)content_h);
     return 0;
 }
 
@@ -711,6 +792,7 @@ int gui_dispatch_input(gui_desktop_t *desktop, const input_event_t *event) {
 int gui_move_window(gui_desktop_t *desktop, uint32_t window_id, uint32_t x,
                     uint32_t y) {
     gui_window_t *window;
+    int32_t old_x, old_y, old_w, old_h;
 
     if (desktop == 0 || desktop->fb == 0 || window_id >= GUI_MAX_WINDOWS ||
         x >= desktop->fb->width || y >= desktop->fb->height ||
@@ -719,9 +801,26 @@ int gui_move_window(gui_desktop_t *desktop, uint32_t window_id, uint32_t x,
     }
 
     window = &desktop->windows[window_id];
+    old_x = (int32_t)window->x;
+    old_y = (int32_t)window->y;
+    old_w = (int32_t)window->w;
+    old_h = (int32_t)window->h;
     window->x = x;
     window->y = y;
     gui_refresh_cursor_shape(desktop);
+    /* Move: damage the union of the old and new positions so both the
+     * old rectangle (now background) and the new rectangle (new window
+     * location) get repainted. Damage coalescing will merge them into a
+     * single rect when they overlap. */
+    int32_t new_x1 = (int32_t)x + old_w;
+    int32_t new_y1 = (int32_t)y + old_h;
+    int32_t old_x1 = old_x + old_w;
+    int32_t old_y1 = old_y + old_h;
+    int32_t ux0 = old_x < (int32_t)x ? old_x : (int32_t)x;
+    int32_t uy0 = old_y < (int32_t)y ? old_y : (int32_t)y;
+    int32_t ux1 = old_x1 > new_x1 ? old_x1 : new_x1;
+    int32_t uy1 = old_y1 > new_y1 ? old_y1 : new_y1;
+    gui_damage_add(desktop, ux0, uy0, ux1 - ux0, uy1 - uy0);
     return 0;
 }
 
@@ -731,9 +830,23 @@ int gui_focus_window(gui_desktop_t *desktop, uint32_t window_id) {
         return -1;
     }
 
+    uint32_t prev = desktop->focused_window_id;
     desktop->focused_window_id = window_id;
     desktop->windows[window_id].z = desktop->next_z++;
     gui_refresh_cursor_shape(desktop);
+    /* Focus only changes the border colour. Dirty a 1-px ring around the
+     * previously focused and the newly focused windows so the border
+     * repaints without touching window content. We approximate the
+     * border as the full window rect; the border redraw is cheap. */
+    if (prev != GUI_NO_WINDOW && prev < GUI_MAX_WINDOWS &&
+        desktop->windows[prev].used != 0) {
+        gui_window_t *w = &desktop->windows[prev];
+        gui_damage_add(desktop, (int32_t)w->x, (int32_t)w->y,
+                       (int32_t)w->w, (int32_t)w->h);
+    }
+    gui_window_t *w = &desktop->windows[window_id];
+    gui_damage_add(desktop, (int32_t)w->x, (int32_t)w->y,
+                   (int32_t)w->w, (int32_t)w->h);
     return 0;
 }
 
@@ -1042,58 +1155,117 @@ static uint32_t gui_next_window_above_z(const gui_desktop_t *desktop,
 }
 
 void gui_draw(gui_desktop_t *desktop) {
-    uint32_t bottom_color;
-    uint32_t height;
-    uint32_t row;
-    uint32_t last_z;
-
     if (desktop == 0 || desktop->fb == 0) {
         return;
     }
 
-    /* Vertical gradient: top is background_color, bottom is a darker
-     * shade for visual depth. Skip the spans covered by windows so the
-     * window's own painting (kernel-drawn bg_color for ownerless windows,
-     * EL0-drawn content for owner-drawn windows like the panel taskbar)
-     * survives every redraw. */
-    height = desktop->fb->height;
-    bottom_color = gui_blend_color(desktop->background_color, 0xff000000U,
-                                   3U, 4U);
-    for (row = 0; row < height; row++) {
-        uint32_t x = 0;
-        while (x < desktop->fb->width) {
-            uint32_t w = gui_next_window_at_or_after(desktop, row, x);
-            uint32_t next;
-            if (w == GUI_MAX_WINDOWS) {
-                next = desktop->fb->width;
-            } else {
-                next = desktop->windows[w].x;
+    /* "Full" sentinel: take the cheap route of repainting the entire
+     * framebuffer. The damage list is ignored because the cost of
+     * walking many small rects would exceed the cost of one full pass
+     * once the bursts accumulate. */
+    if (desktop->damage_full) {
+        uint32_t bottom_color;
+        uint32_t height;
+        uint32_t row;
+        uint32_t last_z;
+
+        height = desktop->fb->height;
+        bottom_color = gui_blend_color(desktop->background_color,
+                                       0xff000000U, 3U, 4U);
+        for (row = 0; row < height; row++) {
+            uint32_t x = 0;
+            while (x < desktop->fb->width) {
+                uint32_t w = gui_next_window_at_or_after(desktop, row, x);
+                uint32_t next;
+                if (w == GUI_MAX_WINDOWS) {
+                    next = desktop->fb->width;
+                } else {
+                    next = desktop->windows[w].x;
+                }
+                if (next > x) {
+                    uint32_t color = gui_blend_color(
+                        desktop->background_color, bottom_color, row,
+                        height - 1U);
+                    fb_fillrect(desktop->fb, x, row, next - x, 1U, color);
+                }
+                if (w == GUI_MAX_WINDOWS) {
+                    break;
+                }
+                x = desktop->windows[w].x + desktop->windows[w].w;
             }
-            if (next > x) {
-                uint32_t color = gui_blend_color(desktop->background_color,
-                                                 bottom_color, row,
-                                                 height - 1U);
-                fb_fillrect(desktop->fb, x, row, next - x, 1U, color);
-            }
-            if (w == GUI_MAX_WINDOWS) {
+        }
+        last_z = 0;
+        for (;;) {
+            uint32_t i = gui_next_window_above_z(desktop, last_z);
+            if (i == GUI_MAX_WINDOWS) {
                 break;
             }
-            x = desktop->windows[w].x + desktop->windows[w].w;
+            gui_draw_window(desktop->fb, desktop, i, &desktop->windows[i]);
+            last_z = desktop->windows[i].z;
         }
+        if (desktop->cursor.visible) {
+            gui_draw_cursor(desktop->fb, desktop->cursor.x,
+                            desktop->cursor.y, desktop->cursor.shape);
+        }
+        return;
     }
 
-    last_z = 0;
-    for (;;) {
-        uint32_t i = gui_next_window_above_z(desktop, last_z);
-        if (i == GUI_MAX_WINDOWS) {
-            break;
+    /* Partial-redraw path: walk the damage list and repaint each rect.
+     * The gradient is painted without skipping window spans (it is
+     * cheap; one fillrect per row) and the windows are then repainted
+     * in z-order, which overdraws where they overlap. The visual
+     * result matches the full path; the per-row cost is proportional
+     * to the damage area instead of the framebuffer size. */
+    for (uint32_t i = 0; i < desktop->damage_count; i++) {
+        const damage_rect_t *r = &desktop->damage_rects[i];
+        int32_t x0 = r->x;
+        int32_t y0 = r->y;
+        int32_t x1 = r->x + r->w;
+        int32_t y1 = r->y + r->h;
+        if (x0 < 0) {
+            x0 = 0;
         }
-        gui_draw_window(desktop->fb, desktop, i, &desktop->windows[i]);
-        last_z = desktop->windows[i].z;
-    }
-    if (desktop->cursor.visible) {
-        gui_draw_cursor(desktop->fb, desktop->cursor.x, desktop->cursor.y,
-                        desktop->cursor.shape);
+        if (y0 < 0) {
+            y0 = 0;
+        }
+        if (x1 > (int32_t)desktop->fb->width) {
+            x1 = (int32_t)desktop->fb->width;
+        }
+        if (y1 > (int32_t)desktop->fb->height) {
+            y1 = (int32_t)desktop->fb->height;
+        }
+        if (x1 <= x0 || y1 <= y0) {
+            continue;
+        }
+        uint32_t height = desktop->fb->height;
+        uint32_t bottom_color = gui_blend_color(desktop->background_color,
+                                                0xff000000U, 3U, 4U);
+        for (int32_t row = y0; row < y1; row++) {
+            uint32_t color = gui_blend_color(desktop->background_color,
+                                             bottom_color, (uint32_t)row,
+                                             height - 1U);
+            fb_fillrect(desktop->fb, (uint32_t)x0, (uint32_t)row,
+                        (uint32_t)(x1 - x0), 1U, color);
+        }
+        uint32_t last_z = 0;
+        for (;;) {
+            uint32_t wi = gui_next_window_above_z(desktop, last_z);
+            if (wi == GUI_MAX_WINDOWS) {
+                break;
+            }
+            gui_draw_window(desktop->fb, desktop, wi, &desktop->windows[wi]);
+            last_z = desktop->windows[wi].z;
+        }
+        if (desktop->cursor.visible) {
+            int32_t cx0 = desktop->cursor.x;
+            int32_t cy0 = desktop->cursor.y;
+            int32_t cx1 = cx0 + (int32_t)GUI_CURSOR_W;
+            int32_t cy1 = cy0 + (int32_t)GUI_CURSOR_H;
+            if (cx1 > x0 && cx0 < x1 && cy1 > y0 && cy0 < y1) {
+                gui_draw_cursor(desktop->fb, desktop->cursor.x,
+                                desktop->cursor.y, desktop->cursor.shape);
+            }
+        }
     }
 }
 
@@ -1253,7 +1425,6 @@ int gui_handle_input(const input_event_t *event) {
                             g_gui_desktop.cursor.y);
         }
         gui_dispatch_input(&g_gui_desktop, event);
-        g_gui_dirty = 1;
         return 0;
     case INPUT_EVENT_MOUSE_BUTTON:
         gui_cursor_button(&g_gui_desktop,
@@ -1306,7 +1477,6 @@ int gui_handle_input(const input_event_t *event) {
                 gui_drag_end(&g_gui_desktop);
             }
         }
-        g_gui_dirty = 1;
         return 0;
     case INPUT_EVENT_KEY_PRESS:
         /* Non-button key: route to focused window as KEY_PRESS. */
@@ -1317,7 +1487,6 @@ int gui_handle_input(const input_event_t *event) {
             gui_window_push_event(window, GUI_EVENT_KEY_PRESS,
                                   (int32_t)event->data.key.key, 0);
         }
-        g_gui_dirty = 1;
         return 0;
     case INPUT_EVENT_KEY_RELEASE:
         if (g_gui_desktop.focused_window_id != GUI_NO_WINDOW) {
@@ -1326,7 +1495,6 @@ int gui_handle_input(const input_event_t *event) {
             gui_window_push_event(window, GUI_EVENT_KEY_RELEASE,
                                   (int32_t)event->data.key.key, 0);
         }
-        g_gui_dirty = 1;
         return 0;
     default:
         return -1;

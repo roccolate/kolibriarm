@@ -191,6 +191,29 @@ void font_draw_text(fb_t *fb, uint32_t x, uint32_t y, const char *text,
     }
 }
 
+uint32_t font_text_width(const char *text) {
+    uint32_t widest = 0;
+    uint32_t run = 0;
+    if (text == 0) {
+        return 0;
+    }
+    while (*text != '\0') {
+        if (*text == '\n') {
+            if (run > widest) {
+                widest = run;
+            }
+            run = 0;
+        } else {
+            run += FONT_CHAR_WIDTH;
+        }
+        text++;
+    }
+    if (run > widest) {
+        widest = run;
+    }
+    return widest;
+}
+
 void font_draw_text_clipped(fb_t *fb, uint32_t x, uint32_t y, uint32_t max_h,
                             const char *text, uint32_t color) {
     uint32_t cursor_x = x;

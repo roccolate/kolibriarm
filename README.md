@@ -167,7 +167,9 @@ make qemu-blk
 # Run in QEMU with virtio-gpu headless and draw the GUI window demo
 make qemu-fb
 
-# Run in QEMU with a visible virtio-gpu window
+# Run in QEMU with a visible virtio-gpu window and a virtio-mouse-device.
+# This is the interactive desktop: click to raise windows, drag the
+# title bar, click panel buttons, etc.
 make qemu-fb-visible
 
 # Run in QEMU with a USB host (qemu-xhci + usb-kbd + usb-mouse).

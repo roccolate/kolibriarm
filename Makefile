@@ -177,7 +177,8 @@ qemu-fb-visible: qemu-check entry-check $(KERNEL_BIN)
 	    -display gtk,gl=off -serial stdio \
 	    -global virtio-mmio.force-legacy=false \
 	    -kernel $(KERNEL_BIN) \
-	    -device virtio-gpu-device,xres=640,yres=480
+	    -device virtio-gpu-device,xres=640,yres=480 \
+	    -device virtio-mouse-device
 
 qemu-debug: qemu-check entry-check $(KERNEL_BIN)
 	qemu-system-aarch64 -machine virt -cpu cortex-a72 -m 128M -nographic \
