@@ -13,24 +13,52 @@ typedef struct heap_block {
     uint64_t free;
     struct heap_block *next;
     struct heap_block *prev;
+    uint64_t arena_id;
 } heap_block_t;
 
 static heap_block_t *g_heap_head;
 static heap_block_t *g_heap_tail;
 static uint64_t g_heap_total_bytes;
+static uint64_t g_next_arena_id = 1;
 
 static uint64_t align_up(uint64_t value) {
     return (value + KHEAP_ALIGN - 1ULL) & ~(KHEAP_ALIGN - 1ULL);
 }
 
-static uint64_t block_payload_capacity(void) {
-    return PAGE_SIZE - sizeof(heap_block_t);
+static uint64_t header_size(void) {
+    return align_up((uint64_t)sizeof(heap_block_t));
+}
+
+static uint64_t page_count_for_payload(uint64_t payload_size) {
+    uint64_t hdr = header_size();
+    uint64_t needed;
+
+    if (payload_size > UINT64_MAX - hdr) {
+        return 0;
+    }
+
+    needed = hdr + payload_size;
+    if (needed > UINT64_MAX - (PAGE_SIZE - 1ULL)) {
+        return 0;
+    }
+
+    return (needed + PAGE_SIZE - 1ULL) / PAGE_SIZE;
+}
+
+static uint64_t block_payload_capacity(uint64_t page_count) {
+    return page_count * PAGE_SIZE - header_size();
 }
 
 static int blocks_are_adjacent(heap_block_t *left, heap_block_t *right) {
-    uintptr_t left_end = (uintptr_t)left + sizeof(heap_block_t) + left->size;
+    uintptr_t left_end = (uintptr_t)left + header_size() + left->size;
 
     return left_end == (uintptr_t)right;
+}
+
+static int blocks_can_coalesce(heap_block_t *left, heap_block_t *right) {
+    return left != NULL && right != NULL && right->free != 0 &&
+           left->arena_id == right->arena_id &&
+           blocks_are_adjacent(left, right);
 }
 
 static void append_block(heap_block_t *block) {
@@ -46,17 +74,24 @@ static void append_block(heap_block_t *block) {
     g_heap_tail = block;
 }
 
-static heap_block_t *extend_heap(void) {
-    uint64_t page = pmm_alloc_page();
+static heap_block_t *extend_heap(uint64_t min_payload_size) {
+    uint64_t pages = page_count_for_payload(min_payload_size);
+    uint64_t addr;
     heap_block_t *block;
 
-    if (page == 0) {
+    if (pages == 0) {
         return NULL;
     }
 
-    block = (heap_block_t *)(uintptr_t)page;
-    block->size = block_payload_capacity();
+    addr = pmm_alloc_pages(pages);
+    if (addr == 0) {
+        return NULL;
+    }
+
+    block = (heap_block_t *)(uintptr_t)addr;
+    block->size = block_payload_capacity(pages);
     block->free = 1;
+    block->arena_id = g_next_arena_id++;
     append_block(block);
     g_heap_total_bytes += block->size;
 
@@ -65,14 +100,16 @@ static heap_block_t *extend_heap(void) {
 
 static void split_block(heap_block_t *block, uint64_t size) {
     heap_block_t *next;
+    uint64_t hdr = header_size();
 
-    if (block->size < size + sizeof(heap_block_t) + KHEAP_MIN_SPLIT) {
+    if (block->size < size + hdr + KHEAP_MIN_SPLIT) {
         return;
     }
 
-    next = (heap_block_t *)((uintptr_t)block + sizeof(heap_block_t) + size);
-    next->size = block->size - size - sizeof(heap_block_t);
+    next = (heap_block_t *)((uintptr_t)block + hdr + size);
+    next->size = block->size - size - hdr;
     next->free = 1;
+    next->arena_id = block->arena_id;
     next->prev = block;
     next->next = block->next;
 
@@ -89,11 +126,11 @@ static void split_block(heap_block_t *block, uint64_t size) {
 static void coalesce_next(heap_block_t *block) {
     heap_block_t *next = block->next;
 
-    if (next == NULL || next->free == 0 || !blocks_are_adjacent(block, next)) {
+    if (!blocks_can_coalesce(block, next)) {
         return;
     }
 
-    block->size += sizeof(heap_block_t) + next->size;
+    block->size += header_size() + next->size;
     block->next = next->next;
 
     if (next->next != NULL) {
@@ -108,21 +145,18 @@ void kheap_init(void) {
         return;
     }
 
-    (void)extend_heap();
+    (void)extend_heap(1);
 }
 
 void *kmalloc(size_t size) {
     uint64_t aligned_size;
     heap_block_t *block;
 
-    if (size == 0) {
+    if (size == 0 || (uint64_t)size > UINT64_MAX - (KHEAP_ALIGN - 1ULL)) {
         return NULL;
     }
 
     aligned_size = align_up((uint64_t)size);
-    if (aligned_size > block_payload_capacity()) {
-        return NULL;
-    }
 
     if (g_heap_head == NULL) {
         kheap_init();
@@ -133,13 +167,13 @@ void *kmalloc(size_t size) {
         if (block->free != 0 && block->size >= aligned_size) {
             split_block(block, aligned_size);
             block->free = 0;
-            return (void *)((uintptr_t)block + sizeof(heap_block_t));
+            return (void *)((uintptr_t)block + header_size());
         }
 
         block = block->next;
     }
 
-    block = extend_heap();
+    block = extend_heap(aligned_size);
     if (block == NULL) {
         return NULL;
     }
@@ -147,7 +181,7 @@ void *kmalloc(size_t size) {
     split_block(block, aligned_size);
     block->free = 0;
 
-    return (void *)((uintptr_t)block + sizeof(heap_block_t));
+    return (void *)((uintptr_t)block + header_size());
 }
 
 void kfree(void *ptr) {
@@ -157,7 +191,7 @@ void kfree(void *ptr) {
         return;
     }
 
-    block = (heap_block_t *)((uintptr_t)ptr - sizeof(heap_block_t));
+    block = (heap_block_t *)((uintptr_t)ptr - header_size());
     if (block->free != 0) {
         return;
     }
@@ -188,3 +222,12 @@ uint64_t kheap_free_bytes(void) {
 
     return free_bytes;
 }
+
+#ifdef KOLIBRIARM_TEST
+void kheap_reset_for_tests(void) {
+    g_heap_head = NULL;
+    g_heap_tail = NULL;
+    g_heap_total_bytes = 0;
+    g_next_arena_id = 1;
+}
+#endif
