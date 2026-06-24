@@ -242,6 +242,9 @@ void test_window_abi_focus_window_raises_z_order(void);
 void test_window_abi_focus_no_focus_window_rejected(void);
 void test_window_abi_window_for_pid_skips_no_owner(void);
 void test_window_abi_window_for_pid_skips_skip_taskbar(void);
+void test_window_abi_get_bounds_returns_current_geometry(void);
+void test_window_abi_resize_window_updates_geometry_and_queues_event(void);
+void test_window_abi_resize_window_rejects_out_of_bounds(void);
 
 int main(void) {
     UNITY_BEGIN();
@@ -487,6 +490,9 @@ int main(void) {
     RUN_TEST(test_window_abi_focus_no_focus_window_rejected);
     RUN_TEST(test_window_abi_window_for_pid_skips_no_owner);
     RUN_TEST(test_window_abi_window_for_pid_skips_skip_taskbar);
+    RUN_TEST(test_window_abi_get_bounds_returns_current_geometry);
+    RUN_TEST(test_window_abi_resize_window_updates_geometry_and_queues_event);
+    RUN_TEST(test_window_abi_resize_window_rejects_out_of_bounds);
 
     return UNITY_END();
 }

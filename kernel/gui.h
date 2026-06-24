@@ -182,7 +182,20 @@ int gui_window_push_event(gui_window_t *window, uint32_t type,
                            int32_t data1, int32_t data2);
 int gui_window_pop_event(gui_window_t *window, gui_event_t *out);
 int gui_move_window(gui_desktop_t *desktop, uint32_t window_id, uint32_t x,
-                    uint32_t y);
+                     uint32_t y);
+/* gui_resize_window: move + resize in one step. If (w, h) changes
+ * relative to the current window, the per-window backing buffer is
+ * reallocated (cleared to bg_color) and a GUI_EVENT_RESIZE with the
+ * new dimensions is pushed onto the owner's event queue so they can
+ * rebuild their layout. Returns 0 on success, -1 on validation
+ * failure. */
+int gui_resize_window(gui_desktop_t *desktop, uint32_t window_id, uint32_t x,
+                      uint32_t y, uint32_t w, uint32_t h);
+/* gui_window_get_bounds: copy the current position and size into the
+ * out-pointers. Any out-pointer may be 0 to skip that field. Returns
+ * 0 on success, -1 if the window does not exist. */
+int gui_window_get_bounds(const gui_window_t *window, uint32_t *out_x,
+                          uint32_t *out_y, uint32_t *out_w, uint32_t *out_h);
 int gui_focus_window(gui_desktop_t *desktop, uint32_t window_id);
 int gui_focus_window_ensure(gui_desktop_t *desktop);
 /* Find the index-th used window owned by owner_pid. Returns the window

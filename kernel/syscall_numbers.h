@@ -120,6 +120,14 @@ _Static_assert(SYS_CURSOR_SET_SHAPE == 79ULL,
 _Static_assert(SYS_WINDOW_FLUSH == 80ULL,
                "ABI drift: SYS_WINDOW_FLUSH — see SYSCALLS.md");
 
+#define SYS_WINDOW_GET_BOUNDS 81ULL
+_Static_assert(SYS_WINDOW_GET_BOUNDS == 81ULL,
+               "ABI drift: SYS_WINDOW_GET_BOUNDS — see SYSCALLS.md");
+
+#define SYS_WINDOW_SET_BOUNDS 82ULL
+_Static_assert(SYS_WINDOW_SET_BOUNDS == 82ULL,
+               "ABI drift: SYS_WINDOW_SET_BOUNDS — see SYSCALLS.md");
+
 #define SYS_TIMEINFO           100ULL
 _Static_assert(SYS_TIMEINFO == 100ULL, "ABI drift: SYS_TIMEINFO — see SYSCALLS.md");
 
@@ -140,7 +148,7 @@ _Static_assert(SYS_EXIT          >= 1ULL  && SYS_EXIT          <= 8ULL,  "ABI dr
 _Static_assert(SYS_MMAP          >= 20ULL && SYS_MMAP          <= 21ULL, "ABI drift: memory range");
 _Static_assert(SYS_OPEN          >= 40ULL && SYS_OPEN          <= 48ULL, "ABI drift: vfs range");
 _Static_assert(SYS_IPC_SEND      >= 60ULL && SYS_IPC_SEND      <= 61ULL, "ABI drift: ipc range");
-_Static_assert(SYS_WINDOW_CREATE >= 70ULL && SYS_WINDOW_FLUSH  <= 80ULL, "ABI drift: window range");
+_Static_assert(SYS_WINDOW_CREATE >= 70ULL && SYS_WINDOW_SET_BOUNDS <= 82ULL, "ABI drift: window range");
 _Static_assert(SYS_TIMEINFO      >= 100ULL && SYS_PROCLIST     <= 102ULL, "ABI drift: info range");
 
 #endif

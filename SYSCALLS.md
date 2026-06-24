@@ -156,6 +156,8 @@ Current limitations:
 | 78 | `sys_window_for_pid` | `x0=owner_pid, x1=index` | window id / `ERR_NOENT` | Return the index-th window owned by the given pid, or `ERR_NOENT` when none |
 | 79 | `sys_cursor_set_shape` | `x0=shape` | 0 / error | Request the global cursor shape (`0=arrow`, `1=hand`) |
 | 80 | `sys_window_flush` | `x0=window_id, x1=x, x2=y, x3=w, x4=h` | 0 / error | Push a content-local damage rect; the compositor partial-redraws only that region |
+| 81 | `sys_window_get_bounds` | `x0=window_id, x1=out_ptr` | 0 / error | Copy the window's `(x, y, w, h)` into the caller's 16-byte buffer as four `uint32_t` values; only the owner may read another process's window bounds |
+| 82 | `sys_window_set_bounds` | `x0=window_id, x1=x, x2=y, x3=w, x4=h` | 0 / error | Move and/or resize the window in one step; if `(w, h)` changes the kernel reallocates the per-window backing and pushes `GUI_EVENT_RESIZE` onto the owner's event queue |
 
 Current limitations:
 - These syscalls are the early desktop ABI, not a stable long-term ABI.
@@ -341,15 +343,13 @@ Planned `open` flags:
 ### Planned GUI / Window System Extensions
 
 The live GUI range starts at 70. Future GUI numbers should be assigned after
-the current 70-79 ABI is cleaned up; do not move GUI calls into 60-69 because
+the current 70-82 ABI is cleaned up; do not move GUI calls into 60-69 because
 that range is already used for IPC.
 
 Planned but not implemented yet:
 
 | Name | Description |
 |------|-------------|
-| `sys_window_get_bounds` | Read current window bounds |
-| `sys_window_set_bounds` | Move and/or resize a window |
 | `sys_window_show` / `sys_window_hide` | Toggle visibility |
 | `sys_draw_line` | Draw a clipped line in a window |
 | `sys_draw_bitmap` | Blit a bitmap into a window |

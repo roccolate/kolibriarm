@@ -686,6 +686,79 @@ static int64_t sys_window_flush(process_t *process, uint64_t window_id,
     return 0;
 }
 
+/*
+ * sys_window_get_bounds: write the window's current (x, y, w, h) into
+ * the user buffer as four uint32_t values. out_ptr must point at a
+ * 16-byte region registered with the caller. Only the owning process
+ * may read another process's window bounds.
+ */
+static int64_t sys_window_get_bounds(process_t *process, uint64_t window_id,
+                                    uint64_t out_ptr) {
+    gui_desktop_t *desktop;
+    gui_window_t *window;
+    uint32_t *out = (uint32_t *)(uintptr_t)out_ptr;
+
+    if (process == 0 || window_id >= GUI_MAX_WINDOWS || out_ptr == 0) {
+        return ERR_INVAL;
+    }
+    if (!user_range_contains(out_ptr, sizeof(uint32_t) * 4U)) {
+        return ERR_INVAL;
+    }
+    desktop = gui_desktop();
+    if (desktop == 0) {
+        return ERR_AGAIN;
+    }
+    window = &desktop->windows[window_id];
+    if (window->used == 0) {
+        return ERR_NOENT;
+    }
+    if (window->owner_pid != process->pid) {
+        return ERR_BADF;
+    }
+    out[0] = window->x;
+    out[1] = window->y;
+    out[2] = window->w;
+    out[3] = window->h;
+    return 0;
+}
+
+/*
+ * sys_window_set_bounds: move and/or resize the window in one step.
+ * If (w, h) changes relative to the current window, the kernel
+ * reallocates the per-window backing buffer (cleared to bg_color)
+ * and pushes GUI_EVENT_RESIZE onto the owner's event queue so the
+ * owner can rebuild its layout before the next redraw.
+ *
+ * Only the owning process may move or resize its window. Bounds are
+ * validated against the desktop framebuffer; out-of-bounds moves
+ * fail with ERR_INVAL without touching the window.
+ */
+static int64_t sys_window_set_bounds(process_t *process, uint64_t window_id,
+                                    uint64_t x, uint64_t y, uint64_t w,
+                                    uint64_t h) {
+    if (process == 0 || window_id >= GUI_MAX_WINDOWS ||
+        x > 0x7fffffffU || y > 0x7fffffffU ||
+        w > 0xffffffffU || h > 0xffffffffU) {
+        return ERR_INVAL;
+    }
+    gui_desktop_t *desktop = gui_desktop();
+    if (desktop == 0) {
+        return ERR_AGAIN;
+    }
+    gui_window_t *window = &desktop->windows[window_id];
+    if (window->used == 0) {
+        return ERR_NOENT;
+    }
+    if (window->owner_pid != process->pid) {
+        return ERR_BADF;
+    }
+    if (gui_resize_window(desktop, (uint32_t)window_id, (uint32_t)x,
+                          (uint32_t)y, (uint32_t)w, (uint32_t)h) != 0) {
+        return ERR_INVAL;
+    }
+    return 0;
+}
+
 static int64_t sys_window_event(process_t *process, exception_frame_t *frame,
                                uint64_t window_id, uint64_t buf_ptr,
                                uint64_t buf_count) {
@@ -900,8 +973,18 @@ void syscall_dispatch(exception_frame_t *frame) {
         break;
     case SYS_WINDOW_FLUSH:
         frame->x[0] = (uint64_t)sys_window_flush(current, frame->x[0],
-                                                 frame->x[1], frame->x[2],
-                                                 frame->x[3], frame->x[4]);
+                                                  frame->x[1], frame->x[2],
+                                                  frame->x[3], frame->x[4]);
+        break;
+    case SYS_WINDOW_GET_BOUNDS:
+        frame->x[0] = (uint64_t)sys_window_get_bounds(current, frame->x[0],
+                                                      frame->x[1]);
+        break;
+    case SYS_WINDOW_SET_BOUNDS:
+        frame->x[0] = (uint64_t)sys_window_set_bounds(current, frame->x[0],
+                                                      frame->x[1],
+                                                      frame->x[2], frame->x[3],
+                                                      frame->x[4]);
         break;
     case SYS_TIMEINFO:
         frame->x[0] = (uint64_t)sys_timeinfo(frame->x[0]);

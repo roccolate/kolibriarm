@@ -964,6 +964,88 @@ int gui_move_window(gui_desktop_t *desktop, uint32_t window_id, uint32_t x,
     return 0;
 }
 
+int gui_resize_window(gui_desktop_t *desktop, uint32_t window_id, uint32_t x,
+                      uint32_t y, uint32_t w, uint32_t h) {
+    gui_window_t *window;
+    int32_t old_x;
+    int32_t old_y;
+    int32_t new_x;
+    int32_t new_y;
+    int32_t old_w;
+    int32_t old_h;
+    int32_t ux0;
+    int32_t uy0;
+    int32_t ux1;
+    int32_t uy1;
+    int32_t size_changed;
+
+    if (desktop == 0 || desktop->fb == 0 || window_id >= GUI_MAX_WINDOWS ||
+        w < 2U || h < 2U ||
+        x >= desktop->fb->width || y >= desktop->fb->height ||
+        x + w > desktop->fb->width || y + h > desktop->fb->height ||
+        desktop->windows[window_id].used == 0) {
+        return -1;
+    }
+
+    window = &desktop->windows[window_id];
+    old_x = (int32_t)window->x;
+    old_y = (int32_t)window->y;
+    old_w = (int32_t)window->w;
+    old_h = (int32_t)window->h;
+    new_x = (int32_t)x;
+    new_y = (int32_t)y;
+    size_changed = (old_w != (int32_t)w || old_h != (int32_t)h) ? 1 : 0;
+
+    window->x = x;
+    window->y = y;
+    window->w = w;
+    window->h = h;
+    gui_refresh_cursor_shape(desktop);
+
+    if (size_changed != 0) {
+        /* The backing buffer is sized in window pixels; gui_window_ensure_backing
+         * keeps the existing allocation if it is large enough and reallocates
+         * otherwise. The new backing is cleared to bg_color so the owner
+         * does not see stale content from the previous size before it can
+         * repaint. */
+        (void)gui_window_ensure_backing(window);
+        /* Tell the owner the new dimensions. The event lands on the owner's
+         * queue; apps that ignore it still get a fresh blank content area
+         * to draw into. */
+        (void)gui_window_push_event(window, GUI_EVENT_RESIZE,
+                                    (int32_t)w, (int32_t)h);
+    }
+
+    ux0 = old_x < new_x ? old_x : new_x;
+    uy0 = old_y < new_y ? old_y : new_y;
+    ux1 = old_x + old_w > new_x + (int32_t)w ? old_x + old_w
+                                              : new_x + (int32_t)w;
+    uy1 = old_y + old_h > new_y + (int32_t)h ? old_y + old_h
+                                              : new_y + (int32_t)h;
+    gui_damage_add(desktop, ux0, uy0, ux1 - ux0, uy1 - uy0);
+    return 0;
+}
+
+int gui_window_get_bounds(const gui_window_t *window, uint32_t *out_x,
+                          uint32_t *out_y, uint32_t *out_w, uint32_t *out_h) {
+    if (window == 0 || window->used == 0) {
+        return -1;
+    }
+    if (out_x != 0) {
+        *out_x = window->x;
+    }
+    if (out_y != 0) {
+        *out_y = window->y;
+    }
+    if (out_w != 0) {
+        *out_w = window->w;
+    }
+    if (out_h != 0) {
+        *out_h = window->h;
+    }
+    return 0;
+}
+
 int gui_focus_window(gui_desktop_t *desktop, uint32_t window_id) {
     uint32_t prev;
     gui_window_t *window;

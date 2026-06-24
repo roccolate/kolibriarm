@@ -230,3 +230,143 @@ void test_window_abi_window_for_pid_skips_skip_taskbar(void) {
         (uint64_t)GUI_NO_WINDOW,
         (uint64_t)gui_window_for_pid(&desktop, 11U, 1U));
 }
+
+void test_window_abi_get_bounds_returns_current_geometry(void) {
+    /* SYSCALLS.md: "sys_window_get_bounds copies the window's
+     * (x, y, w, h) into the caller's 16-byte buffer." gui_window_get_bounds
+     * is the kernel helper the syscall layer wraps; pinning it here
+     * keeps the format and the ownership checks honest. */
+    uint32_t pixels[64 * 64] = {0};
+    fb_t fb;
+    gui_desktop_t desktop;
+    uint32_t window_id = GUI_NO_WINDOW;
+
+    fb_init(&fb, pixels, 64, 64, 64);
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)gui_init(&desktop, &fb, 0xff101010U));
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_create_window_for_pid(
+                                 &desktop, 7U, 12, 24, 100, 60, 0xff000000U,
+                                 0xffffffffU, "bounds_test", &window_id));
+
+    uint32_t x = 0;
+    uint32_t y = 0;
+    uint32_t w = 0;
+    uint32_t h = 0;
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)gui_window_get_bounds(
+                                     &desktop.windows[window_id], &x, &y, &w, &h));
+    TEST_ASSERT_EQUAL_UINT64(12ULL, (uint64_t)x);
+    TEST_ASSERT_EQUAL_UINT64(24ULL, (uint64_t)y);
+    TEST_ASSERT_EQUAL_UINT64(100ULL, (uint64_t)w);
+    TEST_ASSERT_EQUAL_UINT64(60ULL, (uint64_t)h);
+
+    /* Each out-pointer is independently optional. */
+    uint32_t only_w = 0;
+    TEST_ASSERT_EQUAL_UINT64(
+        0, (uint64_t)gui_window_get_bounds(&desktop.windows[window_id],
+                                           0, 0, &only_w, 0));
+    TEST_ASSERT_EQUAL_UINT64(100ULL, (uint64_t)only_w);
+}
+
+void test_window_abi_resize_window_updates_geometry_and_queues_event(void) {
+    /* SYSCALLS.md: "sys_window_set_bounds moves and/or resizes the
+     * window in one step; if (w, h) changes the kernel reallocates
+     * the per-window backing and pushes GUI_EVENT_RESIZE onto the
+     * owner's event queue." gui_resize_window is the kernel helper
+     * the syscall layer wraps. */
+    uint32_t pixels[64 * 64] = {0};
+    fb_t fb;
+    gui_desktop_t desktop;
+    uint32_t window_id = GUI_NO_WINDOW;
+
+    fb_init(&fb, pixels, 64, 64, 64);
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)gui_init(&desktop, &fb, 0xff101010U));
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_create_window_for_pid(
+                                 &desktop, 7U, 0, 0, 16, 16, 0xff000000U,
+                                 0xffffffffU, "resize_test", &window_id));
+
+    /* gui_window_pop_event returns 0 on success and -1 when the queue
+     * is empty. Verify the queue starts empty, then poke it through a
+     * move (no resize event expected) and a resize (event expected). */
+    gui_event_t evbuf[4];
+
+    TEST_ASSERT_EQUAL_UINT64(
+        (uint64_t)-1,
+        (uint64_t)gui_window_pop_event(&desktop.windows[window_id], &evbuf[0]));
+
+    /* Move without resizing: no resize event, but the geometry changes. */
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)gui_resize_window(
+                                     &desktop, window_id, 8U, 8U, 16U, 16U));
+    TEST_ASSERT_EQUAL_UINT64(
+        (uint64_t)-1,
+        (uint64_t)gui_window_pop_event(&desktop.windows[window_id], &evbuf[0]));
+
+    /* Resize: geometry updates AND a GUI_EVENT_RESIZE lands in the
+     * owner's queue with the new (w, h). */
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)gui_resize_window(
+                                     &desktop, window_id, 8U, 8U, 32U, 24U));
+    TEST_ASSERT_EQUAL_UINT64(
+        0,
+        (uint64_t)gui_window_pop_event(&desktop.windows[window_id], &evbuf[0]));
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)GUI_EVENT_RESIZE, (uint64_t)evbuf[0].type);
+    TEST_ASSERT_EQUAL_UINT64(32LL, (uint64_t)evbuf[0].data1);
+    TEST_ASSERT_EQUAL_UINT64(24LL, (uint64_t)evbuf[0].data2);
+
+    uint32_t x = 0;
+    uint32_t y = 0;
+    uint32_t w = 0;
+    uint32_t h = 0;
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)gui_window_get_bounds(
+                                     &desktop.windows[window_id], &x, &y, &w, &h));
+    TEST_ASSERT_EQUAL_UINT64(8ULL, (uint64_t)x);
+    TEST_ASSERT_EQUAL_UINT64(8ULL, (uint64_t)y);
+    TEST_ASSERT_EQUAL_UINT64(32ULL, (uint64_t)w);
+    TEST_ASSERT_EQUAL_UINT64(24ULL, (uint64_t)h);
+}
+
+void test_window_abi_resize_window_rejects_out_of_bounds(void) {
+    /* Bounds that would put the window off-screen, or below the
+     * minimum 2x2 size, must fail without touching the window. */
+    uint32_t pixels[64 * 64] = {0};
+    fb_t fb;
+    gui_desktop_t desktop;
+    uint32_t window_id = GUI_NO_WINDOW;
+
+    fb_init(&fb, pixels, 64, 64, 64);
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)gui_init(&desktop, &fb, 0xff101010U));
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_create_window_for_pid(
+                                 &desktop, 7U, 0, 0, 16, 16, 0xff000000U,
+                                 0xffffffffU, "reject_test", &window_id));
+
+    /* Window exceeds right edge. */
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
+                             (uint64_t)gui_resize_window(&desktop, window_id,
+                                                          60U, 0U, 16U, 16U));
+    /* Window exceeds bottom edge. */
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
+                             (uint64_t)gui_resize_window(&desktop, window_id,
+                                                          0U, 60U, 16U, 16U));
+    /* Below the 2x2 minimum. */
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
+                             (uint64_t)gui_resize_window(&desktop, window_id,
+                                                          0U, 0U, 1U, 16U));
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
+                             (uint64_t)gui_resize_window(&desktop, window_id,
+                                                          0U, 0U, 16U, 1U));
+
+    /* None of those calls touched the window. */
+    uint32_t x = 0;
+    uint32_t y = 0;
+    uint32_t w = 0;
+    uint32_t h = 0;
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)gui_window_get_bounds(
+                                     &desktop.windows[window_id], &x, &y, &w, &h));
+    TEST_ASSERT_EQUAL_UINT64(0ULL, (uint64_t)x);
+    TEST_ASSERT_EQUAL_UINT64(0ULL, (uint64_t)y);
+    TEST_ASSERT_EQUAL_UINT64(16ULL, (uint64_t)w);
+    TEST_ASSERT_EQUAL_UINT64(16ULL, (uint64_t)h);
+}
