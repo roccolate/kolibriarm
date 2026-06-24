@@ -601,7 +601,10 @@ panel_on_click:
     cmp w27, #0
     b.lt panel_on_click_done
 
-    // Button row first (smaller y).
+    // Button row hit test must match panel_redraw_button exactly:
+    // buttons start at local y=4 and x=4, not at the window origin.
+    cmp w27, #(BTN_Y - PANEL_Y)
+    b.lt panel_on_click_done
     cmp w27, #(BTN_Y - PANEL_Y + BTN_H)
     b.lt panel_on_click_button
 
@@ -611,11 +614,14 @@ panel_on_click:
     cmp w27, #(RUN_ROW_Y + RUN_ROW_H)
     b.ge panel_on_click_done
 
-    // Compute slot index from x.
+    // Compute slot index from x, matching panel_run_slot_x's +4 origin.
+    cmp w26, #4
+    b.lt panel_on_click_done
+    sub w3, w26, #4
     mov x0, #RUN_SLOT_W
     add x0, x0, #RUN_SLOT_GAP
-    udiv x1, x26, x0                    // x1 = slot index
-    msub x2, x1, x0, x26                // x2 = remainder
+    udiv x1, x3, x0                    // x1 = slot index
+    msub x2, x1, x0, x3                // x2 = remainder
     cmp x2, #RUN_SLOT_W
     b.ge panel_on_click_done
     cmp x1, #RUN_SLOT_COUNT
@@ -635,10 +641,13 @@ panel_on_click:
     b panel_on_click_done
 
 panel_on_click_button:
+    cmp w26, #4
+    b.lt panel_on_click_done
+    sub w3, w26, #4
     mov x0, #BTN_W
     add x0, x0, #BTN_GAP
-    udiv x1, x26, x0                    // x1 = button index
-    msub x2, x1, x0, x26                // remainder
+    udiv x1, x3, x0                    // x1 = button index
+    msub x2, x1, x0, x3                // remainder
     cmp x2, #BTN_W
     b.ge panel_on_click_done
     cmp x1, #BTN_COUNT
@@ -698,14 +707,17 @@ panel_on_move:
 
     // Compute the new hover target. -1 means "no button".
     mov w9, #-1
-    cmp w27, #0
+    cmp w27, #(BTN_Y - PANEL_Y)
     b.lt 1f
     cmp w27, #(BTN_Y - PANEL_Y + BTN_H)
     b.ge 1f
+    cmp w26, #4
+    b.lt 1f
+    sub w3, w26, #4
     mov x0, #BTN_W
     add x0, x0, #BTN_GAP
-    udiv x1, x26, x0                    // x1 = button index
-    msub x2, x1, x0, x26                // remainder
+    udiv x1, x3, x0                    // x1 = button index
+    msub x2, x1, x0, x3                // remainder
     cmp x2, #BTN_W
     b.ge 1f
     cmp x1, #BTN_COUNT
