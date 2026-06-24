@@ -74,22 +74,20 @@ pushes `GUI_EVENT_RESIZE` onto the owner's event queue. The
 `show`/`hide` pair is still unimplemented and stays in the
 "planned but not implemented" list.
 
-### 2. Editor cursor and arrow keys
+### 2. Editor cursor and arrow keys — done
 
-The editor draws the visible prefix and re-displays the buffer on each
-keystroke, but it has no caret: there is no indication of where the next
-keystroke will land. Arrow keys are ignored. Backspace always deletes the
-last byte, never the one before the caret. Saving to `/tmp/note` writes the
-whole buffer from offset 0; in-place edits are impossible.
+The editor now tracks a `caret` (0..file_len), renders a 2×8 block at
+`(12 + caret_col*8, 28)`, supports Left/Right within the line and
+Up/Down between lines (snapping to the shorter line's end), and
+inserts / deletes at the caret instead of always at the buffer's
+end. Newlines split lines; the line containing the caret is the
+one redrawn. Save still writes the whole buffer from offset 0 (full
+rewrite of a small file), which keeps the I/O path the same.
 
-Implementation sketch:
-- Track `caret` (uint32_t, 0..len) in the panel frame.
-- `SYS_WINDOW_DRAW_RECT` a 1×8 (or 2×8) cursor at `(12 + caret*8, …)` in
-  the text row, then `SYS_WINDOW_FLUSH` the cursor rect only.
-- Left/Right keys move the caret; Up/Down move to the previous/next line.
-- Backspace deletes `text[caret-1]` and decrements caret; insert-at-caret
-  shifts the tail. Save writes from `caret` or rewrites the whole file
-  depending on length delta.
+The shell already had `INPUT_KEY_UP/DOWN` from the existing
+sticky-key wiring; `INPUT_KEY_LEFT/RIGHT` follow the same convention
+and the kernel already produces them through `ESC [ D`/`ESC [ C`
+(see `drivers/input/input.c`).
 
 ### 3. Shell scrollback and prompt placement
 
