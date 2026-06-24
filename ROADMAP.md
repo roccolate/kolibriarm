@@ -228,12 +228,12 @@ those additions touch one small library, not the stable syscall surface.
 
 Exit criteria:
 
-- [ ] `libkarm` and `libkarmdesk` exist and compile standalone.
-- [ ] `clock` builds and runs against `libkarm`/`crt0.S` in
+- [x] `libkarm` and `libkarmdesk` exist and compile standalone.
+- [x] `clock` builds and runs against `libkarm`/`crt0.S` in
       `make qemu` with no user-visible behavior change.
-- [ ] All four apps migrated, each in its own commit.
-- [ ] `tests/test_syscall_abi.c` and the full host suite still pass.
-- [ ] No entries in `kernel/syscall_numbers.h` changed value.
+- [x] All four apps migrated, each in its own commit.
+- [x] `tests/test_syscall_abi.c` and the full host suite still pass.
+- [x] No entries in `kernel/syscall_numbers.h` changed value.
 
 ### 9. RPi 4 hardware bring-up
 
