@@ -73,7 +73,7 @@ OBJS := \
     $(BUILD_DIR)/kernel/sched/sched.o \
     $(BUILD_DIR)/kernel/sched/switch.o \
     $(BUILD_DIR)/kernel/syscall.o \
-    $(BUILD_DIR)/kernel/timer/timer.o \
+    $(BUILD_DIR)/kernel/timer.o \
     $(BUILD_DIR)/kernel/tmpfs.o \
     $(BUILD_DIR)/kernel/user_demo.o \
     $(BUILD_DIR)/kernel/user_entry.o \
@@ -115,6 +115,10 @@ $(BUILD_DIR):
 $(BUILD_DIR)/%.o: %.S | $(BUILD_DIR)
 	mkdir -p $(dir $@)
 	$(CC) $(DEPFLAGS) $(ASFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/kernel/syscall.o: kernel/syscall.c kernel/syscall_diag.h | $(BUILD_DIR)
+	mkdir -p $(dir $@)
+	$(CC) $(DEPFLAGS) $(CFLAGS) -include kernel/syscall_diag.h -c $< -o $@
 
 $(BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
 	mkdir -p $(dir $@)
