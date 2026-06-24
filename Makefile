@@ -54,8 +54,8 @@ CFLAGS  := -Wall -Wextra -Werror -ffreestanding -nostdlib -nostartfiles \
 # Userland C compiles with the same flags plus the libkarm include path
 # so app code can pull in <syscall.h>, <errno.h>, <string.h> from its
 # own build unit without an explicit relative include.
-USERLAND_CFLAGS := $(CFLAGS) -I $(LIBKARM_DIR)
-USERLAND_ASFLAGS := $(ASFLAGS) -I $(LIBKARM_DIR)
+USERLAND_CFLAGS := $(CFLAGS) -I programs -I $(LIBKARM_DIR)
+USERLAND_ASFLAGS := $(ASFLAGS) -I programs -I $(LIBKARM_DIR)
 
 OBJS := \
     $(BUILD_DIR)/boot/start.o \
@@ -145,6 +145,12 @@ $(BUILD_DIR)/$(APPS_DIR)/%.o: $(APPS_DIR)/%.S | $(BUILD_DIR)
 	mkdir -p $(dir $@)
 	$(CC) $(DEPFLAGS) $(ASFLAGS) -c $< -o $@
 
+# Userland C apps. Override the generic C rule so they pick up the
+# libkarm include path through USERLAND_CFLAGS.
+$(BUILD_DIR)/$(APPS_DIR)/%.o: $(APPS_DIR)/%.c | $(BUILD_DIR)
+	mkdir -p $(dir $@)
+	$(CC) $(DEPFLAGS) $(USERLAND_CFLAGS) -c $< -o $@
+
 # programs/libkarm — userland support library. These rules override the
 # generic `$(BUILD_DIR)/%.o` patterns so userland code gets the
 # USERLAND_* flags (which add programs/libkarm to the include path).
@@ -155,6 +161,26 @@ $(BUILD_DIR)/$(LIBKARM_DIR)/%.o: $(LIBKARM_DIR)/%.S | $(BUILD_DIR)
 $(BUILD_DIR)/$(LIBKARM_DIR)/%.o: $(LIBKARM_DIR)/%.c | $(BUILD_DIR)
 	mkdir -p $(dir $@)
 	$(CC) $(DEPFLAGS) $(USERLAND_CFLAGS) -c $< -o $@
+
+# apps that have migrated to libkarm link against the libkarm objects
+# directly instead of programs/apps/common.o. clock is the first such
+# app; the rule below keeps its dependency list explicit so the
+# generic pattern rule (which still pulls in common.o for the rest of
+# the apps) does not fire for clock. clock_end.o is linked last so
+# clock_image_end sits at the tail of the flat image.
+$(BUILD_DIR)/$(APPS_DIR)/clock.elf: $(BUILD_DIR)/$(APPS_DIR)/clock.o \
+    $(BUILD_DIR)/$(APPS_DIR)/clock_header.o \
+    $(BUILD_DIR)/$(LIBKARM_DIR)/syscall.o \
+    $(BUILD_DIR)/$(LIBKARM_DIR)/crt0.o \
+    $(BUILD_DIR)/$(APPS_DIR)/clock_end.o \
+    $(APPS_DIR)/image.ld
+	$(LD) -T $(APPS_DIR)/image.ld -nostdlib \
+	    $(BUILD_DIR)/$(APPS_DIR)/clock.o \
+	    $(BUILD_DIR)/$(APPS_DIR)/clock_header.o \
+	    $(BUILD_DIR)/$(LIBKARM_DIR)/syscall.o \
+	    $(BUILD_DIR)/$(LIBKARM_DIR)/crt0.o \
+	    $(BUILD_DIR)/$(APPS_DIR)/clock_end.o \
+	    -o $@
 
 $(BUILD_DIR)/$(APPS_DIR)/%.elf: $(BUILD_DIR)/$(APPS_DIR)/%.o $(APPS_COMMON_OBJ) $(APPS_DIR)/image.ld
 	$(LD) -T $(APPS_DIR)/image.ld -nostdlib \

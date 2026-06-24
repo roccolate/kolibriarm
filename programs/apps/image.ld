@@ -3,7 +3,7 @@ SECTIONS {
 
     .user_image : ALIGN(16) {
         KEEP(*(.user.image.header*))
-        *(.user.image.text*)
-        *(.user.image.rodata*)
+        *(.user.image.text* .text .text.*)
+        *(.user.image.rodata* .rodata .rodata.*)
     }
 }
