@@ -116,10 +116,6 @@ $(BUILD_DIR)/%.o: %.S | $(BUILD_DIR)
 	mkdir -p $(dir $@)
 	$(CC) $(DEPFLAGS) $(ASFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/kernel/syscall.o: kernel/syscall.c kernel/syscall_diag.h | $(BUILD_DIR)
-	mkdir -p $(dir $@)
-	$(CC) $(DEPFLAGS) $(CFLAGS) -include kernel/syscall_diag.h -c $< -o $@
-
 $(BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
 	mkdir -p $(dir $@)
 	$(CC) $(DEPFLAGS) $(CFLAGS) -c $< -o $@
