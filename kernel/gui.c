@@ -166,6 +166,65 @@ static int gui_close_box_rect(const gui_window_t *window, uint32_t *out_x,
     return 1;
 }
 
+/*
+ * Min / max / close boxes are siblings along the right edge of the
+ * title bar. Close sits at the right edge, minimise one button-width
+ * to its left, maximise between them. We compute the right edge of
+ * the row once and step backwards so the helpers stay in sync if the
+ * button width changes.
+ */
+static int gui_min_max_btn_row(const gui_window_t *window, uint32_t *out_x,
+                               uint32_t *out_y, uint32_t *out_w,
+                               uint32_t *out_h) {
+    uint32_t bw;
+    uint32_t bh;
+
+    if (window == 0 || window->used == 0 || window->title_h == 0U ||
+        window->title[0] == '\0' ||
+        window->title_h < GUI_CLOSE_BTN_MIN_TITLE_H) {
+        return 0;
+    }
+    bh = window->title_h - 2U * GUI_CLOSE_BTN_PAD;
+    if (bh < 4U) {
+        return 0;
+    }
+    bw = bh < GUI_CLOSE_BTN_W ? bh : GUI_CLOSE_BTN_W;
+    if (window->w < 3U * bw + 4U * GUI_CLOSE_BTN_PAD) {
+        return 0;
+    }
+    *out_w = bw;
+    *out_h = bh;
+    *out_y = window->y + GUI_CLOSE_BTN_PAD;
+    /* Right edge of the row, leaving room for all three buttons plus
+     * their internal padding gaps. */
+    *out_x = window->x + window->w - bw - GUI_CLOSE_BTN_PAD;
+    return 1;
+}
+
+int gui_minimize_button_rect(const gui_window_t *window, uint32_t *out_x,
+                             uint32_t *out_y, uint32_t *out_w,
+                             uint32_t *out_h) {
+    uint32_t right_x;
+    if (!gui_min_max_btn_row(window, &right_x, out_y, out_w, out_h)) {
+        return 0;
+    }
+    /* Two buttons to the left of close. */
+    *out_x = right_x - 2U * (*out_w) - 2U * GUI_CLOSE_BTN_PAD;
+    return 1;
+}
+
+int gui_maximize_button_rect(const gui_window_t *window, uint32_t *out_x,
+                             uint32_t *out_y, uint32_t *out_w,
+                             uint32_t *out_h) {
+    uint32_t right_x;
+    if (!gui_min_max_btn_row(window, &right_x, out_y, out_w, out_h)) {
+        return 0;
+    }
+    /* One button to the left of close. */
+    *out_x = right_x - (*out_w) - GUI_CLOSE_BTN_PAD;
+    return 1;
+}
+
 static fb_t backing_fb_for(const gui_window_t *window) {
     fb_t fb;
     uint32_t content_h = window->h > window->title_h
@@ -575,6 +634,7 @@ int gui_create_window_for_pid(gui_desktop_t *desktop, uint32_t owner_pid,
             }
         }
         window->used = 1;
+        window->minimized = 0U;
         gui_apply_builtin_policy(window);
 
         if (desktop->focused_window_id == GUI_NO_WINDOW &&
@@ -1046,6 +1106,50 @@ int gui_window_get_bounds(const gui_window_t *window, uint32_t *out_x,
     return 0;
 }
 
+int gui_window_minimize(gui_desktop_t *desktop, uint32_t window_id) {
+    gui_window_t *window;
+
+    if (desktop == 0 || window_id >= GUI_MAX_WINDOWS) {
+        return -1;
+    }
+    window = &desktop->windows[window_id];
+    if (window->used == 0 || window->minimized != 0U) {
+        return -1;
+    }
+    window->minimized = 1U;
+    /* The owner learns through GUI_EVENT_MINIMIZE on its event queue
+     * — the kernel does not invent a size for the app to wake up into,
+     * the app decides what "minimised" means for itself (pause work,
+     * drop cached layouts, etc.). */
+    (void)gui_window_push_event(window, GUI_EVENT_MINIMIZE, 0, 0);
+    gui_request_redraw();
+    return 0;
+}
+
+int gui_window_restore(gui_desktop_t *desktop, uint32_t window_id) {
+    gui_window_t *window;
+
+    if (desktop == 0 || window_id >= GUI_MAX_WINDOWS) {
+        return -1;
+    }
+    window = &desktop->windows[window_id];
+    if (window->used == 0 || window->minimized == 0U) {
+        return -1;
+    }
+    window->minimized = 0U;
+    /* Raise the window so it lands on top after restore, matching
+     * the focus semantics the panel already uses for non-minimised
+     * clicks. NO_FOCUS keeps docks (which can't be focused) where
+     * they were. */
+    if ((gui_window_effective_flags(window) & GUI_WINDOW_NO_FOCUS) == 0U) {
+        desktop->focused_window_id = window_id;
+    }
+    window->z = desktop->next_z++;
+    (void)gui_window_push_event(window, GUI_EVENT_MAXIMIZE, 0, 0);
+    gui_request_redraw();
+    return 0;
+}
+
 int gui_focus_window(gui_desktop_t *desktop, uint32_t window_id) {
     uint32_t prev;
     gui_window_t *window;
@@ -1132,6 +1236,13 @@ static void gui_draw_window(fb_t *fb, const gui_desktop_t *desktop,
     if (fb == 0 || window == 0 || window->used == 0) {
         return;
     }
+    /* Minimised windows are completely off-screen. The panel greys the
+     * matching running-apps slot and clicking it calls
+     * gui_window_restore, which clears this flag and re-runs this
+     * draw path with the window visible. */
+    if (window->minimized != 0U) {
+        return;
+    }
 
     border = window->border_color;
     if (desktop != 0 && desktop->focused_window_id == index &&
@@ -1184,11 +1295,38 @@ static void gui_draw_window(fb_t *fb, const gui_desktop_t *desktop,
         }
         font_draw_text_clipped(fb, window->x + 2U, text_y, window->title_h,
                                window->title, 0xfff0f4f8U);
+        /* Min / max / close siblings along the right edge. They are
+         * only drawn when the title bar is tall enough to fit three
+         * buttons side by side; smaller title bars fall back to the
+         * close-only layout. */
+        uint32_t mb_x = 0, mb_y = 0, mb_w = 0, mb_h = 0;
+        uint32_t xb_x = 0, xb_y = 0, xb_w = 0, xb_h = 0;
+        uint32_t min_bg = desktop != 0 && desktop->focused_window_id == index
+                              ? 0xffa0a8b8U
+                              : 0xff586070U;
+        uint32_t max_bg = desktop != 0 && desktop->focused_window_id == index
+                              ? 0xffa0a8b8U
+                              : 0xff586070U;
+        uint32_t cls_bg = desktop != 0 && desktop->focused_window_id == index
+                              ? 0xffe04a4aU
+                              : 0xff8a3030U;
+        if (gui_minimize_button_rect(window, &mb_x, &mb_y, &mb_w, &mb_h)) {
+            fb_fillrect(fb, mb_x, mb_y, mb_w, mb_h, min_bg);
+            /* A single horizontal bar at the bottom of the box reads
+             * as a minimise glyph at this resolution. */
+            fb_fillrect(fb, (int32_t)(mb_x + 2U),
+                        (int32_t)(mb_y + mb_h - 3U),
+                        (int32_t)(mb_w - 4U), 1U, 0xfff0f4f8U);
+        }
+        if (gui_maximize_button_rect(window, &xb_x, &xb_y, &xb_w, &xb_h)) {
+            fb_fillrect(fb, xb_x, xb_y, xb_w, xb_h, max_bg);
+            /* A hollow square outline reads as a maximise glyph. */
+            fb_draw_rect(fb, (int32_t)(xb_x + 2U), (int32_t)(xb_y + 2U),
+                         (int32_t)(xb_w - 4U), (int32_t)(xb_h - 4U),
+                         0xfff0f4f8U);
+        }
         if (gui_close_box_rect(window, &cb_x, &cb_y, &cb_w, &cb_h)) {
-            uint32_t cb_bg = desktop != 0 && desktop->focused_window_id == index
-                                 ? 0xffe04a4aU
-                                 : 0xff8a3030U;
-            fb_fillrect(fb, cb_x, cb_y, cb_w, cb_h, cb_bg);
+            fb_fillrect(fb, cb_x, cb_y, cb_w, cb_h, cls_bg);
             fb_draw_line(fb, (int32_t)(cb_x + 2U), (int32_t)(cb_y + 2U),
                          (int32_t)(cb_x + cb_w - 3U),
                          (int32_t)(cb_y + cb_h - 3U), 0xfff8f8f8U);
@@ -1210,7 +1348,7 @@ static uint32_t gui_next_window_at_or_after(const gui_desktop_t *desktop,
     uint32_t best_x = UINT32_MAX;
     for (uint32_t i = 0; i < GUI_MAX_WINDOWS; i++) {
         const gui_window_t *w = &desktop->windows[i];
-        if (w->used == 0) {
+        if (w->used == 0 || w->minimized != 0U) {
             continue;
         }
         if (w->y > row || (w->y + w->h) <= row) {
@@ -1234,7 +1372,8 @@ static uint32_t gui_next_window_above_z(const gui_desktop_t *desktop,
 
     for (uint32_t i = 0; i < GUI_MAX_WINDOWS; i++) {
         const gui_window_t *window = &desktop->windows[i];
-        if (window->used == 0 || window->z <= min_z) {
+        if (window->used == 0 || window->minimized != 0U ||
+            window->z <= min_z) {
             continue;
         }
         if (window->z < best_z) {
@@ -1521,13 +1660,33 @@ int gui_handle_input(const input_event_t *event) {
                                            g_gui_desktop.cursor.y);
                 if (hit != (int32_t)GUI_NO_WINDOW && hit >= 0) {
                     gui_window_t *window = &g_gui_desktop.windows[hit];
-                    uint32_t cb_x = 0, cb_y = 0, cb_w = 0, cb_h = 0;
-                    if (gui_close_box_rect(window, &cb_x, &cb_y, &cb_w,
-                                           &cb_h) &&
-                        g_gui_desktop.cursor.x >= (int32_t)cb_x &&
-                        g_gui_desktop.cursor.x < (int32_t)(cb_x + cb_w) &&
-                        g_gui_desktop.cursor.y >= (int32_t)cb_y &&
-                        g_gui_desktop.cursor.y < (int32_t)(cb_y + cb_h)) {
+                    uint32_t bx_x = 0, bx_y = 0, bx_w = 0, bx_h = 0;
+                    int32_t cx = g_gui_desktop.cursor.x;
+                    int32_t cy = g_gui_desktop.cursor.y;
+                    int button = 0;
+                    if (gui_minimize_button_rect(window, &bx_x, &bx_y, &bx_w,
+                                                  &bx_h) &&
+                        cx >= (int32_t)bx_x &&
+                        cx <  (int32_t)(bx_x + bx_w) &&
+                        cy >= (int32_t)bx_y &&
+                        cy <  (int32_t)(bx_y + bx_h)) {
+                        button = 1; /* minimise */
+                    } else if (gui_maximize_button_rect(window, &bx_x, &bx_y,
+                                                       &bx_w, &bx_h) &&
+                               cx >= (int32_t)bx_x &&
+                               cx <  (int32_t)(bx_x + bx_w) &&
+                               cy >= (int32_t)bx_y &&
+                               cy <  (int32_t)(bx_y + bx_h)) {
+                        button = 2; /* maximise */
+                    } else if (gui_close_box_rect(window, &bx_x, &bx_y, &bx_w,
+                                                   &bx_h) &&
+                               cx >= (int32_t)bx_x &&
+                               cx <  (int32_t)(bx_x + bx_w) &&
+                               cy >= (int32_t)bx_y &&
+                               cy <  (int32_t)(bx_y + bx_h)) {
+                        button = 3; /* close */
+                    }
+                    if (button == 3) {
                         if (gui_window_owner_dead(window)) {
                             (void)gui_destroy_window(&g_gui_desktop,
                                                      (uint32_t)hit);
@@ -1535,6 +1694,12 @@ int gui_handle_input(const input_event_t *event) {
                             (void)gui_window_push_event(window,
                                                         GUI_EVENT_CLOSE, 0, 0);
                         }
+                    } else if (button == 1) {
+                        (void)gui_window_minimize(&g_gui_desktop,
+                                                  (uint32_t)hit);
+                    } else if (button == 2) {
+                        (void)gui_window_push_event(window,
+                                                    GUI_EVENT_MAXIMIZE, 0, 0);
                     } else {
                         gui_drag_start(&g_gui_desktop, (uint32_t)hit,
                                        g_gui_desktop.cursor.x -

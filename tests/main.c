@@ -245,6 +245,8 @@ void test_window_abi_window_for_pid_skips_skip_taskbar(void);
 void test_window_abi_get_bounds_returns_current_geometry(void);
 void test_window_abi_resize_window_updates_geometry_and_queues_event(void);
 void test_window_abi_resize_window_rejects_out_of_bounds(void);
+void test_window_abi_event_types_includes_minimize_and_maximize(void);
+void test_window_abi_minimize_hides_window_and_queues_event(void);
 
 int main(void) {
     UNITY_BEGIN();
@@ -493,6 +495,8 @@ int main(void) {
     RUN_TEST(test_window_abi_get_bounds_returns_current_geometry);
     RUN_TEST(test_window_abi_resize_window_updates_geometry_and_queues_event);
     RUN_TEST(test_window_abi_resize_window_rejects_out_of_bounds);
+    RUN_TEST(test_window_abi_event_types_includes_minimize_and_maximize);
+    RUN_TEST(test_window_abi_minimize_hides_window_and_queues_event);
 
     return UNITY_END();
 }

@@ -759,6 +759,112 @@ static int64_t sys_window_set_bounds(process_t *process, uint64_t window_id,
     return 0;
 }
 
+/*
+ * sys_window_minimize: hide the window through the same path the
+ * kernel-drawn minimise button uses. Owners typically trigger this
+ * from their own UI; the kernel still fires GUI_EVENT_MINIMIZE on
+ * the owner's queue so app state can pause. Only the owner may
+ * minimise its own window.
+ */
+static int64_t sys_window_minimize(process_t *process, uint64_t window_id) {
+    gui_desktop_t *desktop;
+    gui_window_t *window;
+
+    if (process == 0 || window_id >= GUI_MAX_WINDOWS) {
+        return ERR_INVAL;
+    }
+    desktop = gui_desktop();
+    if (desktop == 0) {
+        return ERR_AGAIN;
+    }
+    window = &desktop->windows[window_id];
+    if (window->used == 0) {
+        return ERR_NOENT;
+    }
+    if (window->owner_pid != process->pid) {
+        return ERR_BADF;
+    }
+    if (gui_window_minimize(desktop, (uint32_t)window_id) != 0) {
+        return ERR_INVAL;
+    }
+    return 0;
+}
+
+/*
+ * sys_window_restore: inverse of sys_window_minimize. The window
+ * raises to the top of the z-stack and the kernel fires
+ * GUI_EVENT_MAXIMIZE on the owner queue so apps that resize on
+ * maximise can rebuild their layout. Only the owner may restore its
+ * own window.
+ */
+static int64_t sys_window_restore(process_t *process, uint64_t window_id) {
+    gui_desktop_t *desktop;
+    gui_window_t *window;
+
+    if (process == 0 || window_id >= GUI_MAX_WINDOWS) {
+        return ERR_INVAL;
+    }
+    desktop = gui_desktop();
+    if (desktop == 0) {
+        return ERR_AGAIN;
+    }
+    window = &desktop->windows[window_id];
+    if (window->used == 0) {
+        return ERR_NOENT;
+    }
+    if (window->owner_pid != process->pid) {
+        return ERR_BADF;
+    }
+    if (gui_window_restore(desktop, (uint32_t)window_id) != 0) {
+        return ERR_INVAL;
+    }
+    return 0;
+}
+
+/*
+ * sys_window_state: write a small bitmap of window flags into the
+ * caller's 32-bit buffer. Lets apps (and the panel) check whether
+ * a window is currently minimised without polling the event queue.
+ *
+ * Bit layout (matches GUI_WINDOW_STATE_* in kernel/gui.h):
+ *   bit 0 = GUI_WINDOW_STATE_MINIMIZED
+ *   bit 1 = GUI_WINDOW_STATE_FOCUSED
+ */
+static int64_t sys_window_state(process_t *process, uint64_t window_id,
+                                uint64_t out_ptr) {
+    gui_desktop_t *desktop;
+    gui_window_t *window;
+    uint32_t *out = (uint32_t *)(uintptr_t)out_ptr;
+    uint32_t state = 0;
+
+    if (process == 0 || window_id >= GUI_MAX_WINDOWS || out_ptr == 0) {
+        return ERR_INVAL;
+    }
+    if (!user_range_contains(out_ptr, sizeof(uint32_t))) {
+        return ERR_INVAL;
+    }
+    desktop = gui_desktop();
+    if (desktop == 0) {
+        return ERR_AGAIN;
+    }
+    window = &desktop->windows[window_id];
+    if (window->used == 0) {
+        return ERR_NOENT;
+    }
+    if (window->owner_pid != process->pid) {
+        return ERR_BADF;
+    }
+    if (window->minimized != 0U) {
+        state |= 0x1U;
+    }
+    if (desktop->focused_window_id == (uint32_t)window_id &&
+        (window->flags & GUI_WINDOW_NO_FOCUS) == 0U) {
+        state |= 0x2U;
+    }
+    *out = state;
+    return 0;
+}
+
 static int64_t sys_window_event(process_t *process, exception_frame_t *frame,
                                uint64_t window_id, uint64_t buf_ptr,
                                uint64_t buf_count) {
@@ -985,6 +1091,16 @@ void syscall_dispatch(exception_frame_t *frame) {
                                                       frame->x[1],
                                                       frame->x[2], frame->x[3],
                                                       frame->x[4]);
+        break;
+    case SYS_WINDOW_MINIMIZE:
+        frame->x[0] = (uint64_t)sys_window_minimize(current, frame->x[0]);
+        break;
+    case SYS_WINDOW_RESTORE:
+        frame->x[0] = (uint64_t)sys_window_restore(current, frame->x[0]);
+        break;
+    case SYS_WINDOW_STATE:
+        frame->x[0] = (uint64_t)sys_window_state(current, frame->x[0],
+                                                  frame->x[1]);
         break;
     case SYS_TIMEINFO:
         frame->x[0] = (uint64_t)sys_timeinfo(frame->x[0]);

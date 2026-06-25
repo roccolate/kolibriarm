@@ -158,6 +158,9 @@ Current limitations:
 | 80 | `sys_window_flush` | `x0=window_id, x1=x, x2=y, x3=w, x4=h` | 0 / error | Push a content-local damage rect; the compositor partial-redraws only that region |
 | 81 | `sys_window_get_bounds` | `x0=window_id, x1=out_ptr` | 0 / error | Copy the window's `(x, y, w, h)` into the caller's 16-byte buffer as four `uint32_t` values; only the owner may read another process's window bounds |
 | 82 | `sys_window_set_bounds` | `x0=window_id, x1=x, x2=y, x3=w, x4=h` | 0 / error | Move and/or resize the window in one step; if `(w, h)` changes the kernel reallocates the per-window backing and pushes `GUI_EVENT_RESIZE` onto the owner's event queue |
+| 83 | `sys_window_minimize` | `x0=window_id` | 0 / error | Owner-only: hide the window through the same path the kernel-drawn minimise button uses; pushes `GUI_EVENT_MINIMIZE` onto the owner's queue |
+| 84 | `sys_window_restore` | `x0=window_id` | 0 / error | Owner-only: inverse of `sys_window_minimize`; clears the hidden flag, raises the window, and pushes `GUI_EVENT_MAXIMIZE` |
+| 85 | `sys_window_state` | `x0=window_id, x1=out_ptr` | 0 / error | Owner-only: write a 32-bit state bitmap into the caller's buffer; bit 0 = minimised, bit 1 = currently focused |
 
 Current limitations:
 - These syscalls are the early desktop ABI, not a stable long-term ABI.

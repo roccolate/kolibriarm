@@ -326,6 +326,97 @@ void test_window_abi_resize_window_updates_geometry_and_queues_event(void) {
     TEST_ASSERT_EQUAL_UINT64(24ULL, (uint64_t)h);
 }
 
+void test_window_abi_event_types_includes_minimize_and_maximize(void) {
+    /* SYSCALLS.md: GUI_EVENT_MINIMIZE (7) and GUI_EVENT_MAXIMIZE (8)
+     * are the synthetic events the kernel pushes when the user
+     * clicks the kernel-drawn title-bar buttons (or the owner
+     * calls sys_window_minimize / sys_window_restore). They are
+     * part of the ABI; an app that switches on event types must see
+     * these numbers. */
+    TEST_ASSERT_EQUAL_UINT64(7ULL, (uint64_t)GUI_EVENT_MINIMIZE);
+    TEST_ASSERT_EQUAL_UINT64(8ULL, (uint64_t)GUI_EVENT_MAXIMIZE);
+
+    /* Distinct from each other and from every older event id. */
+    TEST_ASSERT_TRUE(GUI_EVENT_MINIMIZE != GUI_EVENT_MAXIMIZE);
+    TEST_ASSERT_TRUE(GUI_EVENT_MINIMIZE != GUI_EVENT_CLOSE);
+    TEST_ASSERT_TRUE(GUI_EVENT_MAXIMIZE != GUI_EVENT_RESIZE);
+}
+
+void test_window_abi_minimize_hides_window_and_queues_event(void) {
+    /* gui_window_minimize sets window->minimized, pushes
+     * GUI_EVENT_MINIMIZE on the owner's queue, and requests a
+     * desktop redraw. gui_window_restore reverses it. */
+    uint32_t pixels[64 * 64] = {0};
+    fb_t fb;
+    gui_desktop_t desktop;
+    uint32_t window_id = GUI_NO_WINDOW;
+
+    fb_init(&fb, pixels, 64, 64, 64);
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)gui_init(&desktop, &fb, 0xff101010U));
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_create_window_for_pid(
+                                 &desktop, 31U, 0, 0, 16, 16, 0xff000000U,
+                                 0xffffffffU, "min_test", &window_id));
+
+    /* Initially visible and unminimised. */
+    TEST_ASSERT_EQUAL_UINT64(0U,
+                             (uint64_t)desktop.windows[window_id].minimized);
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_window_minimize(&desktop, window_id));
+    TEST_ASSERT_EQUAL_UINT64(1U,
+                             (uint64_t)desktop.windows[window_id].minimized);
+
+    gui_event_t ev;
+    TEST_ASSERT_EQUAL_UINT64(
+        0, (uint64_t)gui_window_pop_event(&desktop.windows[window_id], &ev));
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)GUI_EVENT_MINIMIZE, (uint64_t)ev.type);
+
+    /* Restore clears the flag, raises z, pushes GUI_EVENT_MAXIMIZE. */
+    uint32_t old_z = desktop.windows[window_id].z;
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_window_restore(&desktop, window_id));
+    TEST_ASSERT_EQUAL_UINT64(0U,
+                             (uint64_t)desktop.windows[window_id].minimized);
+    TEST_ASSERT_TRUE(desktop.windows[window_id].z > old_z);
+
+    TEST_ASSERT_EQUAL_UINT64(
+        0, (uint64_t)gui_window_pop_event(&desktop.windows[window_id], &ev));
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)GUI_EVENT_MAXIMIZE, (uint64_t)ev.type);
+
+    /* Idempotence: minimising an already-minimised window is a no-op
+     * (returns -1) and does not push a second event. The queue still
+     * holds the first MINIMIZE from the call above, so pop returns
+     * it and the next pop is empty. */
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_window_minimize(&desktop, window_id));
+    TEST_ASSERT_EQUAL_UINT64(
+        (uint64_t)-1,
+        (uint64_t)gui_window_minimize(&desktop, window_id));
+    TEST_ASSERT_EQUAL_UINT64(
+        0, (uint64_t)gui_window_pop_event(&desktop.windows[window_id], &ev));
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)GUI_EVENT_MINIMIZE, (uint64_t)ev.type);
+    TEST_ASSERT_EQUAL_UINT64(
+        (uint64_t)-1,
+        (uint64_t)gui_window_pop_event(&desktop.windows[window_id], &ev));
+
+    /* Same in the other direction: a freshly created, not-yet-
+     * minimised window rejects restore with -1. We re-allocate a
+     * second window so this case has a fresh starting point. */
+    uint32_t second_id = GUI_NO_WINDOW;
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_create_window_for_pid(
+                                 &desktop, 31U, 32, 32, 16, 16, 0xff000000U,
+                                 0xffffffffU, "restore_reject", &second_id));
+    TEST_ASSERT_EQUAL_UINT64(
+        (uint64_t)-1,
+        (uint64_t)gui_window_restore(&desktop, second_id));
+    TEST_ASSERT_EQUAL_UINT64(
+        (uint64_t)-1,
+        (uint64_t)gui_window_pop_event(&desktop.windows[second_id], &ev));
+}
+
 void test_window_abi_resize_window_rejects_out_of_bounds(void) {
     /* Bounds that would put the window off-screen, or below the
      * minimum 2x2 size, must fail without touching the window. */

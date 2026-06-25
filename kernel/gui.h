@@ -33,12 +33,20 @@
 #define GUI_WINDOW_SKIP_TASKBAR (1U << 2)
 #define GUI_WINDOW_DOCK         (1U << 3)
 
+/* Bitmap returned by sys_window_state. The bit assignments are part
+ * of the ABI; apps (and the panel) read them to check whether a
+ * window is minimised or focused without polling the event queue. */
+#define GUI_WINDOW_STATE_MINIMIZED (1U << 0)
+#define GUI_WINDOW_STATE_FOCUSED   (1U << 1)
+
 #define GUI_EVENT_KEY_PRESS   1U
 #define GUI_EVENT_KEY_RELEASE 2U
 #define GUI_EVENT_MOUSE_CLICK 3U
 #define GUI_EVENT_MOUSE_MOVE  4U
 #define GUI_EVENT_RESIZE      5U
 #define GUI_EVENT_CLOSE        6U
+#define GUI_EVENT_MINIMIZE     7U
+#define GUI_EVENT_MAXIMIZE     8U
 
 typedef struct {
     uint32_t type;
@@ -82,6 +90,13 @@ typedef struct {
      * is responsible for painting its own background the first time.
      */
     uint8_t owner_drawn;
+    /* Set when the user clicked the kernel-drawn minimise button. The
+     * compositor skips minimised windows entirely; the panel greys
+     * the corresponding running-apps slot and clicking that slot
+     * restores the window via gui_window_restore. The owner learns
+     * about the transition through GUI_EVENT_MINIMIZE / GUI_EVENT_MAXIMIZE
+     * on the event queue; the kernel-side flag is the source of truth. */
+    uint8_t minimized;
     /* Per-window backing buffer. Allocated lazily on the first owner
      * draw; covers only the content area (excluding the kernel-drawn
      * title bar). Width = window->w, height = window->h - title_h. When
@@ -196,6 +211,27 @@ int gui_resize_window(gui_desktop_t *desktop, uint32_t window_id, uint32_t x,
  * 0 on success, -1 if the window does not exist. */
 int gui_window_get_bounds(const gui_window_t *window, uint32_t *out_x,
                           uint32_t *out_y, uint32_t *out_w, uint32_t *out_h);
+/* Mark the window as minimised. The compositor skips minimised
+ * windows; the panel greys the matching running-apps slot. A
+ * GUI_EVENT_MINIMIZE is pushed onto the owner's queue so the app
+ * can pause work and free per-window resources if it wants to.
+ * Returns 0 on success, -1 if the window does not exist or was
+ * already minimised. */
+int gui_window_minimize(gui_desktop_t *desktop, uint32_t window_id);
+/* Restore a minimised window: clear the flag, raise its z-order so
+ * it lands on top, push GUI_EVENT_MAXIMIZE on the owner queue, and
+ * request a desktop redraw. Returns 0 on success, -1 on bad input
+ * or a window that was not minimised. */
+int gui_window_restore(gui_desktop_t *desktop, uint32_t window_id);
+/* Compute the kernel-drawn minimise button rect for hit testing.
+ * Same contract as gui_close_box_rect: returns 1 if the button is
+ * rendered (titled window large enough), 0 otherwise. */
+int gui_minimize_button_rect(const gui_window_t *window, uint32_t *out_x,
+                             uint32_t *out_y, uint32_t *out_w, uint32_t *out_h);
+/* Same contract as gui_minimize_button_rect for the maximise
+ * button, which sits between the minimise and close buttons. */
+int gui_maximize_button_rect(const gui_window_t *window, uint32_t *out_x,
+                             uint32_t *out_y, uint32_t *out_w, uint32_t *out_h);
 int gui_focus_window(gui_desktop_t *desktop, uint32_t window_id);
 int gui_focus_window_ensure(gui_desktop_t *desktop);
 /* Find the index-th used window owned by owner_pid. Returns the window
