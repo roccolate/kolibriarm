@@ -1,12 +1,20 @@
 // KolibriARM app: shell (C version, on libkarm + libkarmdesk)
 //
-// Minimal windowed command shell. It reads key events from its GUI
-// window, keeps a tiny fixed line history, and supports a small
-// command set: help, ls, mem, ps, ticks, run <name> [args...], kill
-// last, pwd, exit. The `run` command splits its tail on whitespace
-// and passes the resulting tokens to the spawned app through
-// SYS_SPAWN_ARGV so each arg lands in the new process's argv[] on
-// its initial stack.
+// Windowed command shell with a circular log buffer, scrollback,
+// bottom-anchored prompt, and command history. Reads key events
+// from its GUI window.
+//
+// Display layout (top to bottom):
+//   [history ..          ]
+//   [.. scrolled view .. ]  <-- DISPLAY_LINES rows pulled from log[]
+//   [.. top of log      ]
+//   U <line>            <-- prompt row, always at the bottom
+//   ENTER RUNS COMMAND  <-- footer
+//
+// PgUp / PgDn scroll the log view; scroll_offset resets to 0 when
+// the user types a printable key or presses Enter (output follows
+// input again). Up/Down walk the command history independently of
+// the log scroll position.
 //
 // Non-window syscalls (spawn, spawn_argv, kill, readdir, timeinfo,
 // meminfo, proclist, write, yield, exit) go through libkarm's typed
@@ -28,20 +36,26 @@
 #define WIN_H          280
 #define TITLE_BAR_H     12
 #define LINE_CAP        64
-#define DISPLAY_LINES    8
+#define DISPLAY_LINES    7
 #define DISPLAY_COLS    48
 #define EVENT_CAP        8
 #define PROC_CAP         4
-#define ARGV_MAX         8     // matches kernel USER_DEMO_ARGV_MAX_STRINGS
+#define ARGV_MAX         8
 #define HISTORY_DEPTH    8
+/* Circular log buffer depth. Each entry is a fixed LINE_CAP-byte
+ * cstring; 256 is enough for several screens of output without
+ * silently dropping history on a busy session. */
+#define LOG_DEPTH      256
 
 #define COLOR_BG         0xff141820U
 #define COLOR_BORDER     0xff708870U
 #define COLOR_TEXT       0xffd8e8d8U
 
 // Arrow keys come in as synthetic codes from drivers/input/input.c.
-#define INPUT_KEY_UP    0x101
-#define INPUT_KEY_DOWN  0x102
+#define INPUT_KEY_UP    0x101U
+#define INPUT_KEY_DOWN  0x102U
+#define INPUT_KEY_PGUP  0x105U
+#define INPUT_KEY_PGDN  0x106U
 
 // sys_proclist entry: pid(u32) state(u32) name[16] -> 24 bytes.
 typedef struct {
@@ -58,14 +72,26 @@ static void write_cstr(long fd, const char *s) {
 }
 
 typedef struct {
-    char       line[LINE_CAP];
-    size_t     line_len;
-    char       display[DISPLAY_LINES][DISPLAY_COLS];
-    char       history[HISTORY_DEPTH][LINE_CAP];
-    int        history_count;
-    int        history_cursor;
-    int        last_spawned_pid;
-    long       wid;
+    /* Current input line being edited. */
+    char   line[LINE_CAP];
+    size_t line_len;
+    /* Command history: depth-8 ring of past input lines. */
+    char   history[HISTORY_DEPTH][LINE_CAP];
+    int    history_count;
+    int    history_cursor;   // == history_count means "live"
+    int    last_spawned_pid;
+    /* Circular output log. log[(log_head - 1 - i) mod LOG_DEPTH] for
+     * i in 0..log_count-1 gives the last i+1 entries in newest-first
+     * order; log_count is capped at LOG_DEPTH. */
+    char   log[LOG_DEPTH][LINE_CAP];
+    int    log_head;        // index of next slot to write
+    int    log_count;       // total entries currently stored (<= LOG_DEPTH)
+    /* Scroll offset in lines from the bottom of the log. 0 means
+     * "follow output" — new push_line entries scroll the view back
+     * to the bottom. >0 freezes the view on older entries. */
+    int    scroll_offset;
+    long   wid;
+    /* Syscall scratch buffers. */
     uint64_t   info[3];
     char       numbuf[24];
     proc_entry_t procs[PROC_CAP];
@@ -73,46 +99,36 @@ typedef struct {
     uint64_t   argv_ptrs[ARGV_MAX];
 } shell_state_t;
 
-static void display_clear(shell_state_t *s) {
-    for (int i = 0; i < DISPLAY_LINES; i++) {
-        for (int j = 0; j < DISPLAY_COLS; j++) {
-            s->display[i][j] = '\0';
-        }
-    }
-}
-
-static void push_line(shell_state_t *s, const char *line) {
-    for (int i = 0; i < DISPLAY_LINES - 1; i++) {
-        for (int j = 0; j < DISPLAY_COLS; j++) {
-            s->display[i][j] = s->display[i + 1][j];
-        }
-    }
-    int n = 0;
-    while (n < DISPLAY_COLS - 1 && line[n] != '\0') {
-        s->display[DISPLAY_LINES - 1][n] = line[n];
+static void log_push(shell_state_t *s, const char *line) {
+    size_t n = 0;
+    while (n + 1 < LINE_CAP && line[n] != '\0') {
+        s->log[s->log_head][n] = line[n];
         n++;
     }
-    while (n < DISPLAY_COLS) {
-        s->display[DISPLAY_LINES - 1][n] = '\0';
-        n++;
+    s->log[s->log_head][n] = '\0';
+    s->log_head = (s->log_head + 1) % LOG_DEPTH;
+    if (s->log_count < LOG_DEPTH) {
+        s->log_count++;
     }
 }
 
-static void draw_text(long wid, long x, long y, const char *s) {
-    (void)gui_window_draw_text(wid, x, y, COLOR_TEXT, s);
-}
-
-static void redraw(shell_state_t *s) {
-    (void)gui_window_draw_rect(s->wid, 1, 0, WIN_W - 2,
-                               WIN_H - TITLE_BAR_H - 2, COLOR_BG);
-    draw_text(s->wid, 12, 8, "USER SHELL");
-    for (int i = 0; i < DISPLAY_LINES; i++) {
-        draw_text(s->wid, 12, 28 + i * 16, s->display[i]);
+// Read the log entry `lines_back` lines before the head (0 = newest).
+// Always writes into a NUL-terminated LINE_CAP buffer.
+static void log_read(const shell_state_t *s, int lines_back, char *out) {
+    if (lines_back < 0) {
+        lines_back = 0;
     }
-    draw_text(s->wid, 12, 168, "U");
-    draw_text(s->wid, 32, 168, s->line);
-    draw_text(s->wid, 12, 196, "ENTER RUNS COMMAND");
-    (void)gui_window_flush(s->wid, 0, 0, WIN_W, WIN_H - TITLE_BAR_H);
+    if (lines_back >= s->log_count) {
+        out[0] = '\0';
+        return;
+    }
+    int idx = (s->log_head - 1 - lines_back + LOG_DEPTH) % LOG_DEPTH;
+    size_t i = 0;
+    while (i + 1 < LINE_CAP && s->log[idx][i] != '\0') {
+        out[i] = s->log[idx][i];
+        i++;
+    }
+    out[i] = '\0';
 }
 
 static void history_push(shell_state_t *s) {
@@ -152,6 +168,63 @@ static void history_load(shell_state_t *s, int idx) {
     s->line_len = n;
 }
 
+// Render the visible log window into `out_lines` (DISPLAY_LINES
+// rows of DISPLAY_COLS bytes each). When scroll_offset is 0 the
+// view shows the most recent DISPLAY_LINES lines; when >0 it walks
+// backwards from the head.
+static void render_log_view(shell_state_t *s, char (*out_lines)[DISPLAY_COLS]) {
+    for (int i = 0; i < DISPLAY_LINES; i++) {
+        for (int j = 0; j < DISPLAY_COLS; j++) {
+            out_lines[i][j] = '\0';
+        }
+    }
+    for (int row = 0; row < DISPLAY_LINES; row++) {
+        /* The bottom-most visible row in the rendered list corresponds
+         * to (scroll_offset) lines back from the head. Going up the
+         * list goes further back. */
+        int lines_back = s->scroll_offset + (DISPLAY_LINES - 1 - row);
+        if (lines_back >= s->log_count) {
+            continue;
+        }
+        char tmp[LINE_CAP];
+        log_read(s, lines_back, tmp);
+        for (int j = 0; j < DISPLAY_COLS - 1 && tmp[j] != '\0'; j++) {
+            out_lines[row][j] = tmp[j];
+        }
+    }
+}
+
+static void draw_text(long wid, long x, long y, const char *s) {
+    (void)gui_window_draw_text(wid, x, y, COLOR_TEXT, s);
+}
+
+static void redraw(shell_state_t *s) {
+    (void)gui_window_draw_rect(s->wid, 1, 0, WIN_W - 2,
+                               WIN_H - TITLE_BAR_H - 2, COLOR_BG);
+    draw_text(s->wid, 12, 8, "USER SHELL");
+    char (*out_lines)[DISPLAY_COLS] = (char (*)[DISPLAY_COLS])s->numbuf;
+    render_log_view(s, out_lines);
+    for (int i = 0; i < DISPLAY_LINES; i++) {
+        draw_text(s->wid, 12, 28 + i * 16, out_lines[i]);
+    }
+    /* Prompt row sits just below the log view, anchored to the
+     * bottom of the visible area regardless of scroll_offset. */
+    long prompt_y = 28 + DISPLAY_LINES * 16;
+    draw_text(s->wid, 12, prompt_y, "U");
+    draw_text(s->wid, 32, prompt_y, s->line);
+    draw_text(s->wid, 12, prompt_y + 28, "ENTER RUNS COMMAND");
+    (void)gui_window_flush(s->wid, 0, 0, WIN_W, WIN_H - TITLE_BAR_H);
+}
+
+// Append `text` to the log and re-render.
+static void shell_emit(shell_state_t *s, const char *text) {
+    log_push(s, text);
+    // Auto-follow: if the user is at the bottom, snap the view.
+    if (s->scroll_offset > 0) {
+        s->scroll_offset = 0;
+    }
+}
+
 static int starts_with(const char *s, const char *prefix) {
     while (*prefix != '\0') {
         if (*s != *prefix) {
@@ -168,7 +241,7 @@ static void cmd_run(shell_state_t *s, const char *input) {
         input++;
     }
     if (*input == '\0') {
-        push_line(s, "RUN FAILED");
+        shell_emit(s, "RUN FAILED");
         return;
     }
     int argc = 0;
@@ -196,7 +269,7 @@ static void cmd_run(shell_state_t *s, const char *input) {
         argc++;
     }
     if (argc == 0) {
-        push_line(s, "RUN FAILED");
+        shell_emit(s, "RUN FAILED");
         return;
     }
     char path[32];
@@ -213,41 +286,41 @@ static void cmd_run(shell_state_t *s, const char *input) {
 
     long pid = kli_spawn_argv(path, 0, (const long *)s->argv_ptrs, (long)argc);
     if (pid < 0) {
-        push_line(s, "RUN FAILED");
+        shell_emit(s, "RUN FAILED");
         return;
     }
     s->last_spawned_pid = (int)pid;
-    push_line(s, "SPAWNED");
+    shell_emit(s, "SPAWNED");
 }
 
 static void dispatch(shell_state_t *s, const char *line) {
     if (strcmp(line, "help") == 0) {
-        push_line(s, "HELP LS MEM PS TICKS RUN NAME KILL LAST EXIT");
+        shell_emit(s, "HELP LS MEM PS TICKS RUN NAME KILL LAST EXIT");
     } else if (strcmp(line, "ls") == 0) {
         char buf[DISPLAY_COLS];
         long n = kli_readdir("/", buf, (long)sizeof(buf));
         if (n < 0) {
-            push_line(s, "LS FAILED");
+            shell_emit(s, "LS FAILED");
         } else {
             if (n >= DISPLAY_COLS) n = DISPLAY_COLS - 1;
             buf[n] = '\0';
-            push_line(s, buf);
+            shell_emit(s, buf);
         }
     } else if (strcmp(line, "mem") == 0) {
         if (kli_meminfo(s->info) < 0) {
-            push_line(s, "MEM FAILED");
+            shell_emit(s, "MEM FAILED");
         } else {
-            push_line(s, "FREE PAGES");
+            shell_emit(s, "FREE PAGES");
             kli_utoa(s->info[1], s->numbuf, sizeof(s->numbuf));
-            push_line(s, s->numbuf);
+            shell_emit(s, s->numbuf);
         }
     } else if (strcmp(line, "ps") == 0) {
         long n = kli_proclist(s->procs, PROC_CAP);
         if (n < 0) {
-            push_line(s, "PS FAILED");
+            shell_emit(s, "PS FAILED");
             return;
         }
-        push_line(s, "PROCESSES");
+        shell_emit(s, "PROCESSES");
         for (long i = 0; i < n && i < PROC_CAP; i++) {
             char name_buf[17];
             for (int j = 0; j < 16; j++) {
@@ -255,28 +328,28 @@ static void dispatch(shell_state_t *s, const char *line) {
                 name_buf[j] = (c == '\0') ? '\0' : c;
             }
             name_buf[16] = '\0';
-            push_line(s, name_buf);
+            shell_emit(s, name_buf);
         }
     } else if (strcmp(line, "ticks") == 0) {
         if (kli_timeinfo(s->info) < 0) {
-            push_line(s, "TICKS FAILED");
+            shell_emit(s, "TICKS FAILED");
         } else {
-            push_line(s, "TIMER TICKS");
+            shell_emit(s, "TIMER TICKS");
             kli_utoa(s->info[0], s->numbuf, sizeof(s->numbuf));
-            push_line(s, s->numbuf);
+            shell_emit(s, s->numbuf);
         }
     } else if (starts_with(line, "run ")) {
         cmd_run(s, line + 4);
     } else if (strcmp(line, "kill last") == 0) {
         if (s->last_spawned_pid == 0) {
-            push_line(s, "KILL FAILED");
+            shell_emit(s, "KILL FAILED");
         } else {
             (void)kli_kill((long)s->last_spawned_pid);
             s->last_spawned_pid = 0;
-            push_line(s, "KILLED");
+            shell_emit(s, "KILLED");
         }
     } else if (strcmp(line, "pwd") == 0) {
-        push_line(s, "ROOT");
+        shell_emit(s, "ROOT");
     } else if (strcmp(line, "exit") == 0) {
         (void)gui_window_destroy(s->wid);
         kli_exit(0);
@@ -284,7 +357,7 @@ static void dispatch(shell_state_t *s, const char *line) {
             (void)kli_yield();
         }
     } else {
-        push_line(s, "UNKNOWN COMMAND");
+        shell_emit(s, "UNKNOWN COMMAND");
     }
 }
 
@@ -316,11 +389,32 @@ static void handle_key(shell_state_t *s, int key) {
         }
         return;
     }
+    if (key == INPUT_KEY_PGUP) {
+        int max_off = s->log_count - 1;
+        if (max_off < 0) {
+            max_off = 0;
+        }
+        int next = s->scroll_offset + DISPLAY_LINES;
+        if (next > max_off) {
+            next = max_off;
+        }
+        s->scroll_offset = next;
+        return;
+    }
+    if (key == INPUT_KEY_PGDN) {
+        int next = s->scroll_offset - DISPLAY_LINES;
+        if (next < 0) {
+            next = 0;
+        }
+        s->scroll_offset = next;
+        return;
+    }
     if (key == 8 || key == 127) {
         if (s->line_len > 0) {
             s->line_len--;
             s->line[s->line_len] = '\0';
         }
+        s->scroll_offset = 0;
         return;
     }
     if (key == 13 || key == 10) {
@@ -330,11 +424,13 @@ static void handle_key(shell_state_t *s, int key) {
             submitted[i] = s->line[i];
         }
         history_push(s);
+        shell_emit(s, submitted);
         dispatch(s, submitted);
         for (size_t i = 0; i < s->line_len; i++) {
             s->line[i] = '\0';
         }
         s->line_len = 0;
+        s->scroll_offset = 0;
         return;
     }
     if (key >= 32 && key <= 126) {
@@ -342,6 +438,7 @@ static void handle_key(shell_state_t *s, int key) {
             s->line[s->line_len++] = (char)key;
             s->line[s->line_len] = '\0';
         }
+        s->scroll_offset = 0;
     }
 }
 
@@ -354,13 +451,20 @@ int main(int argc, char **argv) {
     s.history_count = 0;
     s.history_cursor = 0;
     s.last_spawned_pid = 0;
+    s.log_head = 0;
+    s.log_count = 0;
+    s.scroll_offset = 0;
     for (size_t i = 0; i < LINE_CAP; i++) {
         s.line[i] = '\0';
         for (int h = 0; h < HISTORY_DEPTH; h++) {
             s.history[h][i] = '\0';
         }
     }
-    display_clear(&s);
+    for (int i = 0; i < LOG_DEPTH; i++) {
+        for (size_t j = 0; j < LINE_CAP; j++) {
+            s.log[i][j] = '\0';
+        }
+    }
 
     write_cstr(1, "shell: starting\n");
 
@@ -372,7 +476,7 @@ int main(int argc, char **argv) {
     }
     (void)gui_window_set_title(s.wid, "shell", TITLE_BAR_H);
 
-    push_line(&s, "SHELL READY");
+    shell_emit(&s, "SHELL READY");
     redraw(&s);
 
     gui_event_t events[EVENT_CAP];
