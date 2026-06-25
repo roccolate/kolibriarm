@@ -47,7 +47,24 @@ void process_set_current(process_t *process);
 process_t *process_current(void);
 void process_table_init(void);
 process_t *process_alloc(uint32_t pid, const char *name);
+/*
+ * Release a process slot. Frees the process-owned physical pages
+ * (anonymous mmap regions + the page-table page itself) before
+ * zeroing the slot. Does NOT destroy GUI windows owned by the
+ * process — call gui_destroy_windows_for_pid(pid) first if the
+ * process owned any. Idempotent: a process whose slot is already
+ * UNUSED is a no-op.
+ */
 void process_release(process_t *process);
+/*
+ * Walk a process's user_regions and free any page-table pages and
+ * anonymous-mapped pages owned by it. Safe to call multiple times:
+ * regions whose owned pages have already been released are skipped
+ * via PROCESS_USER_REGION_OWNED_PAGES. Cleared regions have
+ * paddr==0 and are skipped. After return the process owns no
+ * physical pages and process->page_table is 0.
+ */
+void process_free_resources(process_t *process);
 uint32_t process_count(void);
 const process_t *process_at(uint32_t index);
 int process_index(const process_t *process, uint32_t *index);

@@ -194,6 +194,12 @@ int gui_create_window_for_pid(gui_desktop_t *desktop, uint32_t owner_pid,
                               uint32_t bg_color, uint32_t border_color,
                               const char *title, uint32_t *window_id);
 int gui_destroy_window(gui_desktop_t *desktop, uint32_t window_id);
+/*
+ * Destroy every window whose owner_pid matches `pid`. Called when
+ * a process becomes a zombie so the desktop does not accumulate
+ * stale windows between spawns. See kernel/gui.c for the contract.
+ */
+void gui_destroy_windows_for_pid(gui_desktop_t *desktop, uint32_t pid);
 int gui_set_window_title(gui_desktop_t *desktop, uint32_t window_id,
                          const char *title);
 int gui_set_window_title_bar(gui_desktop_t *desktop, uint32_t window_id,

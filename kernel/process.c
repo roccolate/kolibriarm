@@ -2,6 +2,10 @@
 
 #include <stdint.h>
 
+#include "kernel/gui.h"
+#include "kernel/mm/pmm.h"
+#include "kernel/mm/vmm.h"
+
 #define USER_REGION_ALIGN 4096ULL
 
 static process_t g_processes[PROCESS_MAX_PROCESSES];
@@ -51,6 +55,43 @@ static void region_clear(process_user_region_t *region) {
     region->flags = 0;
 }
 
+/*
+ * Free every physical page the process owns: each anonymous-mapped
+ * region's pages plus the page-table page itself. Called from
+ * process_release so a slot, once reclaimed, returns all of its
+ * PMM budget to the allocator. Safe to call multiple times:
+ * PROCESS_USER_REGION_OWNED_PAGES is cleared as pages are released
+ * and paddr is reset to 0, so a double-free would try to release
+ * zero pages and the PMM layer rejects it.
+ */
+void process_free_resources(process_t *process) {
+    if (process == 0) {
+        return;
+    }
+
+    for (uint32_t i = 0; i < process->user_region_count &&
+                        i < PROCESS_MAX_USER_REGIONS; i++) {
+        process_user_region_t *region = &process->user_regions[i];
+        if ((region->flags & PROCESS_USER_REGION_OWNED_PAGES) == 0 ||
+            region->paddr == 0) {
+            continue;
+        }
+        if (region->end > region->start) {
+            uint64_t size = region->end - region->start;
+            for (uint64_t off = 0; off < size; off += PAGE_SIZE) {
+                pmm_free_page(region->paddr + off);
+            }
+        }
+        region->flags &= ~((uint64_t)PROCESS_USER_REGION_OWNED_PAGES);
+        region->paddr = 0;
+    }
+
+    if (process->page_table != 0) {
+        pmm_free_page((uint64_t)(uintptr_t)process->page_table);
+        process->page_table = 0;
+    }
+}
+
 static void region_copy(process_user_region_t *dst,
                         const process_user_region_t *src) {
     if (dst == 0 || src == 0) {
@@ -98,12 +139,24 @@ void process_release(process_t *process) {
         return;
     }
 
+    /*
+     * If the slot has already been released, process_init left the
+     * state at UNUSED and page_table at 0. Skip the PMM work and
+     * just no-op so callers (e.g. process_reclaim_zombies running
+     * on an already-cleaned slot) stay safe.
+     */
+    if (process->state == PROCESS_UNUSED && process->page_table == 0 &&
+        process->user_region_count == 0) {
+        return;
+    }
+
     if (g_current_process == process) {
         g_current_process = 0;
     }
 
     int counted = process_in_table(process) && process->state != PROCESS_UNUSED;
 
+    process_free_resources(process);
     process_init(process, 0, 0);
     process->state = PROCESS_UNUSED;
     if (counted && g_process_count > 0) {
@@ -178,6 +231,7 @@ int process_wait_zombie(uint32_t pid, uint64_t *exit_code) {
     }
 
     *exit_code = process->exit_code;
+    gui_destroy_windows_for_pid(gui_desktop(), pid);
     process_release(process);
     return 0;
 }
@@ -197,6 +251,19 @@ int process_kill(uint32_t pid, uint64_t exit_code) {
 void process_reclaim_zombies(void) {
     for (uint32_t i = 0; i < PROCESS_MAX_PROCESSES; i++) {
         if (g_processes[i].state == PROCESS_ZOMBIE) {
+            /*
+             * Destroy any windows the dying process owned before
+             * freeing its slot. Without this the desktop would
+             * accumulate ghost windows between spawns (a fresh
+             * spawn hits process_reclaim_zombies, but the previous
+             * owner's window would only be freed when the user
+             * happened to click its (also-orphaned) close button).
+             * gui_destroy_windows_for_pid is a no-op if the
+             * process owned no windows (the panel, the click-only
+             * path) so it is always safe.
+             */
+            gui_destroy_windows_for_pid(gui_desktop(),
+                                        g_processes[i].pid);
             process_release(&g_processes[i]);
         }
     }

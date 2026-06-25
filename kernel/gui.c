@@ -799,6 +799,33 @@ int gui_destroy_window(gui_desktop_t *desktop, uint32_t window_id) {
     return 0;
 }
 
+/*
+ * Destroy every window whose owner_pid matches `pid`. Called when
+ * the process becomes a zombie so the desktop does not accumulate
+ * stale windows the user cannot close (close buttons need a live
+ * owner to deliver GUI_EVENT_CLOSE; the kernel only destroys
+ * windows of dead owners on a click). Without this, a long
+ * session that spawns and exits many apps would fill the desktop's
+ * 16-window pool with ghosts. Idempotent: GUI_NO_OWNER (no match)
+ * or a pid with no windows is a no-op.
+ */
+void gui_destroy_windows_for_pid(gui_desktop_t *desktop, uint32_t pid) {
+    if (desktop == 0 || pid == GUI_NO_OWNER) {
+        return;
+    }
+    /*
+     * Walk back-to-front so a destruction does not shift the
+     * indices we still need to inspect. gui_destroy_window zeroes
+     * the slot, so forward iteration would skip windows.
+     */
+    for (uint32_t i = GUI_MAX_WINDOWS; i-- > 0;) {
+        if (desktop->windows[i].used != 0 &&
+            desktop->windows[i].owner_pid == pid) {
+            (void)gui_destroy_window(desktop, i);
+        }
+    }
+}
+
 int gui_set_window_title(gui_desktop_t *desktop, uint32_t window_id,
                          const char *title) {
     gui_window_t *window;

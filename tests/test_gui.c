@@ -1923,3 +1923,89 @@ void test_gui_damage_full_sentinel_re_paints_everything(void) {
      * here is repainted by the gradient. */
     TEST_ASSERT_TRUE(pixels[0] != 0xff777777U);
 }
+
+/* ------------------------------------------------------------------
+ * Tests for gui_destroy_windows_for_pid. The helper walks the
+ * window pool back-to-front destroying every window whose
+ * owner_pid matches. We verify the loop, the multi-window case,
+ * and the GUI_NO_OWNER / non-matching paths.
+ * ------------------------------------------------------------------ */
+
+void test_gui_destroy_windows_for_pid_destroys_owner_windows(void) {
+    uint32_t pixels[64] = { 0 };
+    fb_t fb;
+    gui_desktop_t desktop;
+    uint32_t w_a;
+    uint32_t w_b;
+
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)fb_init(&fb, pixels, 8, 8, 8));
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)gui_init(&desktop, &fb, 0xff000000U));
+    desktop.cursor.visible = 0;
+
+    /* Owner 7 owns two windows; owner 8 owns one. The framebuffer
+     * is 8x8 so we keep all windows inside [0, 4] x [0, 4] range. */
+    TEST_ASSERT_EQUAL_UINT64(0,
+        (uint64_t)gui_create_window_for_pid(&desktop, 7U, 0, 0, 2, 2,
+            0xff111111U, 0xff000000U, "a", &w_a));
+    TEST_ASSERT_EQUAL_UINT64(0,
+        (uint64_t)gui_create_window_for_pid(&desktop, 7U, 2, 0, 2, 2,
+            0xff222222U, 0xff000000U, "b", &w_b));
+    TEST_ASSERT_EQUAL_UINT64(0,
+        (uint64_t)gui_create_window_for_pid(&desktop, 8U, 4, 0, 2, 2,
+            0xff333333U, 0xff000000U, "c", NULL));
+
+    gui_destroy_windows_for_pid(&desktop, 7U);
+
+    /* Both of pid 7's windows must be UNUSED; pid 8's window must
+     * still be alive because the destroy call only matches 7. */
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)desktop.windows[w_a].used);
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)desktop.windows[w_b].used);
+    /* Find the still-alive window (its id is whichever is still
+     * used == 1) and assert it is owner 8. */
+    for (uint32_t i = 0; i < GUI_MAX_WINDOWS; i++) {
+        if (desktop.windows[i].used != 0) {
+            TEST_ASSERT_EQUAL_UINT64(8U, desktop.windows[i].owner_pid);
+        }
+    }
+}
+
+void test_gui_destroy_windows_for_pid_is_safe_on_no_match(void) {
+    uint32_t pixels[64] = { 0 };
+    fb_t fb;
+    gui_desktop_t desktop;
+    uint32_t window_id;
+
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)fb_init(&fb, pixels, 8, 8, 8));
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)gui_init(&desktop, &fb, 0xff000000U));
+    desktop.cursor.visible = 0;
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+        (uint64_t)gui_create_window_for_pid(&desktop, 7U, 0, 0, 4, 4,
+            0xff111111U, 0xff000000U, "a", &window_id));
+
+    /* No window owned by pid 99 — must be a no-op. */
+    gui_destroy_windows_for_pid(&desktop, 99U);
+
+    TEST_ASSERT_EQUAL_UINT64(1, (uint64_t)desktop.windows[window_id].used);
+    TEST_ASSERT_EQUAL_UINT64(7U, desktop.windows[window_id].owner_pid);
+}
+
+void test_gui_destroy_windows_for_pid_handles_null_and_no_owner_sentinel(void) {
+    /*
+     * GUI_NO_OWNER is 0xffffffff. Passing it must not match any
+     * window (none have that pid). Passing a NULL desktop must
+     * not crash.
+     */
+    uint32_t pixels[64] = { 0 };
+    fb_t fb;
+    gui_desktop_t desktop;
+
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)fb_init(&fb, pixels, 8, 8, 8));
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)gui_init(&desktop, &fb, 0xff000000U));
+    desktop.cursor.visible = 0;
+
+    gui_destroy_windows_for_pid(0, 7U);
+    gui_destroy_windows_for_pid(&desktop, GUI_NO_OWNER);
+    /* No assertion — the run is the test. */
+    TEST_ASSERT_TRUE(1);
+}
