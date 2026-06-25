@@ -62,44 +62,9 @@ static uint32_t make_mouse_config(uint8_t *buf) {
     return c;
 }
 
-static uint32_t make_mouse_config_8(uint8_t *buf) {
-    uint32_t c = 0;
-    c = put8(buf, c, 9);
-    c = put8(buf, c, USB_DESC_CONFIGURATION);
-    c = put16(buf, c, 9 + 9 + 9 + 7);
-    c = put8(buf, c, 1);
-    c = put8(buf, c, 1);
-    c = put8(buf, c, 0);
-    c = put8(buf, c, 0x80);
-    c = put8(buf, c, 50);
-    c = put8(buf, c, 9);
-    c = put8(buf, c, USB_DESC_INTERFACE);
-    c = put8(buf, c, 0);
-    c = put8(buf, c, 0);
-    c = put8(buf, c, 1);
-    c = put8(buf, c, USB_CLASS_HID);
-    c = put8(buf, c, 0x01U);
-    c = put8(buf, c, 0x02U);
-    c = put8(buf, c, 0);
-    c = put8(buf, c, 9);
-    c = put8(buf, c, USB_DESC_HID);
-    c = put16(buf, c, 0x0111U);
-    c = put8(buf, c, 0);
-    c = put8(buf, c, 1);
-    c = put8(buf, c, USB_DESC_HID_REPORT);
-    c = put16(buf, c, 50);
-    c = put8(buf, c, 7);
-    c = put8(buf, c, USB_DESC_ENDPOINT);
-    c = put8(buf, c, 0x81U);
-    c = put8(buf, c, USB_EP_TRANSFER_INTERRUPT);
-    c = put16(buf, c, 8);
-    c = put8(buf, c, 10);
-    return c;
-}
-
 void test_hid_init_registers_mouse_protocol(void) {
     uint8_t buf[64];
-    uint32_t len = make_mouse_config_8(buf);
+    uint32_t len = make_mouse_config(buf);
     usb_config_walk_t walk;
     TEST_ASSERT_EQUAL_UINT64(0,
                             (uint64_t)usb_walk_configuration(
@@ -110,13 +75,15 @@ void test_hid_init_registers_mouse_protocol(void) {
     TEST_ASSERT_EQUAL_UINT64(1, n);
     TEST_ASSERT_EQUAL_UINT64(1, state.count);
     TEST_ASSERT_EQUAL_UINT64(0x02U, state.devices[0].protocol);
+    TEST_ASSERT_EQUAL_UINT64(0, state.devices[0].interface_number);
     TEST_ASSERT_EQUAL_UINT64(0x01U, state.devices[0].endpoint_in);
-    TEST_ASSERT_EQUAL_UINT64(8, state.devices[0].max_packet);
+    TEST_ASSERT_EQUAL_UINT64(10, state.devices[0].interval);
+    TEST_ASSERT_EQUAL_UINT64(4, state.devices[0].max_packet);
 }
 
 void test_hid_init_zeroes_prev_keys_for_new_device(void) {
     uint8_t buf[64];
-    uint32_t len = make_mouse_config_8(buf);
+    uint32_t len = make_mouse_config(buf);
     usb_config_walk_t walk;
     usb_walk_configuration(buf, (uint16_t)len, &walk);
     usb_hid_state_t state;
@@ -129,6 +96,30 @@ void test_hid_init_zeroes_prev_keys_for_new_device(void) {
         TEST_ASSERT_EQUAL_UINT64(HID_KEY_NONE, state.devices[0].prev_keys[k]);
     }
     TEST_ASSERT_EQUAL_UINT64(0, state.devices[0].prev_buttons);
+}
+
+void test_hid_add_device_appends_and_copies_usb_handle(void) {
+    uint8_t buf[64];
+    uint32_t len = make_mouse_config(buf);
+    usb_config_walk_t walk;
+    usb_walk_configuration(buf, (uint16_t)len, &walk);
+
+    usb_hid_state_t state;
+    uint8_t n = usb_hid_init(&state, &walk);
+    TEST_ASSERT_EQUAL_UINT64(1, n);
+    TEST_ASSERT_EQUAL_UINT64(1, state.count);
+
+    usb_device_t usb_dev;
+    usb_dev.address = 2;
+    usb_dev.xhci.ctrl = (xhci_controller_t *)(uintptr_t)0x1000U;
+    usb_dev.xhci.index = 1;
+    usb_dev.xhci.slot_id = 7;
+    n = usb_hid_add_device(&state, &walk, &usb_dev);
+
+    TEST_ASSERT_EQUAL_UINT64(1, n);
+    TEST_ASSERT_EQUAL_UINT64(2, state.count);
+    TEST_ASSERT_EQUAL_UINT64(2, state.devices[1].device_address);
+    TEST_ASSERT_EQUAL_UINT64(7, state.devices[1].usb_device.xhci.slot_id);
 }
 
 void test_hid_init_returns_zero_when_no_boot_interfaces(void) {

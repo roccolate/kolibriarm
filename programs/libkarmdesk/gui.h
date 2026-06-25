@@ -1,14 +1,9 @@
 // programs/libkarmdesk/gui.h
 //
 // Typed wrappers for the KolibriARM window/compositor syscalls
-// (numbers 70..80). This directory is deliberately separate from
-// programs/libkarm because the GUI ABI is the one still actively
-// growing — sys_window_get_bounds, sys_window_set_bounds, show/hide,
-// and the resize event are all reserved but unimplemented per the
-// current ROADMAP (items 1 and 4). When those land, they get a
-// SYSCALLS.md row + syscall_numbers.h entry + dispatch case + host
-// test in one commit, and only libkarmdesk needs a new wrapper —
-// libkarm stays untouched.
+// (numbers 70..86). This directory is deliberately separate from
+// programs/libkarm so desktop-facing wrappers can grow without
+// touching the stable process / memory / I/O / IPC surface.
 //
 // Functions:
 // - gui_window_create    -> SYS_WINDOW_CREATE     (70)
@@ -22,6 +17,12 @@
 // - gui_window_for_pid   -> SYS_WINDOW_FOR_PID    (78)
 // - gui_cursor_set_shape -> SYS_CURSOR_SET_SHAPE  (79)
 // - gui_window_flush     -> SYS_WINDOW_FLUSH      (80)
+// - gui_window_get_bounds -> SYS_WINDOW_GET_BOUNDS (81)
+// - gui_window_set_bounds -> SYS_WINDOW_SET_BOUNDS (82)
+// - gui_window_minimize  -> SYS_WINDOW_MINIMIZE   (83)
+// - gui_window_restore   -> SYS_WINDOW_RESTORE    (84)
+// - gui_window_state     -> SYS_WINDOW_STATE      (85)
+// - gui_cursor_register_region -> SYS_CURSOR_REGISTER_REGION (86)
 //
 // Return value: raw `long` from the kernel; >= 0 on success,
 // negative error code from <libkarm/errno.h> on failure.
@@ -68,33 +69,11 @@ _Static_assert(sizeof(gui_event_t) == 12,
 #define GUI_CURSOR_ARROW 0U
 #define GUI_CURSOR_HAND  1U
 
-// Most window syscalls fit into libkarm's existing __syscallN
-// trampolines. The single exception is sys_window_create: the
-// documented ABI has 7 user arguments (x, y, w, h, bg, border,
-// title_ptr) but libkarm's trampolines stop at 6. Inline asm here
-// sets x6 = title_ptr and traps. The kernel's current
-// syscall_dispatch only reads frame->x[0..5] — title_ptr is ignored
-// today, and apps still call gui_window_set_title immediately after
-// to set the title — but matching the documented ABI keeps the
-// wrapper forward-compatible with the eventual fix.
-
 static inline long gui_window_create(long x, long y, long w, long h,
                                      long bg, long border,
                                      const char *title) {
-    register long x0 __asm__("x0") = x;
-    register long x1 __asm__("x1") = y;
-    register long x2 __asm__("x2") = w;
-    register long x3 __asm__("x3") = h;
-    register long x4 __asm__("x4") = bg;
-    register long x5 __asm__("x5") = border;
-    register long x6 __asm__("x6") = (long)(uintptr_t)title;
-    register long x8 __asm__("x8") = SYS_WINDOW_CREATE;
-    __asm__ volatile("svc #0"
-                     : "+r"(x0)
-                     : "r"(x1), "r"(x2), "r"(x3),
-                       "r"(x4), "r"(x5), "r"(x6), "r"(x8)
-                     : "memory", "cc");
-    return x0;
+    return __syscall7(SYS_WINDOW_CREATE, x, y, w, h, bg, border,
+                      (long)(uintptr_t)title);
 }
 
 static inline long gui_window_destroy(long window_id) {
@@ -104,8 +83,8 @@ static inline long gui_window_destroy(long window_id) {
 // SYS_WINDOW_DRAW_TEXT args: wid=x0, x=x1, y=x2, color=x3, str=x4.
 static inline long gui_window_draw_text(long window_id, long x, long y,
                                        long color, const char *str) {
-    return __syscall6(SYS_WINDOW_DRAW_TEXT, window_id, x, y, color,
-                      (long)(uintptr_t)str, 0);
+    return __syscall5(SYS_WINDOW_DRAW_TEXT, window_id, x, y, color,
+                      (long)(uintptr_t)str);
 }
 
 // SYS_WINDOW_DRAW_RECT args: wid=x0, x=x1, y=x2, w=x3, h=x4, color=x5.
@@ -145,7 +124,7 @@ static inline long gui_cursor_set_shape(long shape) {
 // SYS_WINDOW_FLUSH args: wid=x0, x=x1, y=x2, w=x3, h=x4.
 static inline long gui_window_flush(long window_id, long x, long y,
                                    long w, long h) {
-    return __syscall6(SYS_WINDOW_FLUSH, window_id, x, y, w, h, 0);
+    return __syscall5(SYS_WINDOW_FLUSH, window_id, x, y, w, h);
 }
 
 // gui_window_get_bounds reads the window's (x, y, w, h) into out_ptr
@@ -163,11 +142,11 @@ static inline long gui_window_get_bounds(long window_id, void *out_ptr) {
 // onto the owner's event queue so the app can rebuild its layout.
 static inline long gui_window_set_bounds(long window_id, long x, long y,
                                          long w, long h) {
-    return __syscall6(SYS_WINDOW_SET_BOUNDS, window_id, x, y, w, h, 0);
+    return __syscall5(SYS_WINDOW_SET_BOUNDS, window_id, x, y, w, h);
 }
 
 // gui_window_minimize: owner-only; hides the window through the same
-// path the kernel-drawn minimise button uses. The kernel pushes
+// path the kernel-drawn minimize button uses. The kernel pushes
 // GUI_EVENT_MINIMIZE on the owner's event queue.
 static inline long gui_window_minimize(long window_id) {
     return __syscall1(SYS_WINDOW_MINIMIZE, window_id);
@@ -196,20 +175,8 @@ static inline long gui_window_state(long window_id, uint32_t *out_ptr) {
 static inline long gui_cursor_register_region(long window_id, long slot,
                                               long x, long y, long w,
                                               long h, long shape) {
-    register long x0 __asm__("x0") = window_id;
-    register long x1 __asm__("x1") = slot;
-    register long x2 __asm__("x2") = x;
-    register long x3 __asm__("x3") = y;
-    register long x4 __asm__("x4") = w;
-    register long x5 __asm__("x5") = h;
-    register long x6 __asm__("x6") = shape;
-    register long x8 __asm__("x8") = SYS_CURSOR_REGISTER_REGION;
-    __asm__ volatile("svc #0"
-                     : "+r"(x0)
-                     : "r"(x1), "r"(x2), "r"(x3),
-                       "r"(x4), "r"(x5), "r"(x6), "r"(x8)
-                     : "memory", "cc");
-    return x0;
+    return __syscall7(SYS_CURSOR_REGISTER_REGION, window_id, slot, x, y,
+                      w, h, shape);
 }
 
 #endif

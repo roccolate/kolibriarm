@@ -12,28 +12,40 @@ BOARD ?= qemu_virt
 BOARD_DIR := drivers/boards/$(BOARD)
 KERNEL_ELF := $(BUILD_DIR)/kernel.elf
 KERNEL_BIN := $(BUILD_DIR)/kernel.bin
-# 95000 covers the userland library migration (libkarm pulls in
-# crt0 + syscall + string per migrated app, which adds ~1 KB each).
-KERNEL_SIZE_LIMIT ?= 95000
+# 100 KB covers the libkarm-migrated apps plus the xHCI command/event
+# ring backend while keeping the kernel binary under a tight ceiling.
+KERNEL_SIZE_LIMIT ?= 100000
 APPS := shell editor monitor clock panel
 APPS_DIR := programs/apps
-APPS_COMMON_OBJ := $(BUILD_DIR)/$(APPS_DIR)/common.o
 APP_OBJS := $(addprefix $(BUILD_DIR)/$(APPS_DIR)/,$(addsuffix .o,$(APPS)))
+APP_HEADER_OBJS := $(addprefix $(BUILD_DIR)/$(APPS_DIR)/,$(addsuffix _header.o,$(APPS)))
+APP_END_OBJS := $(addprefix $(BUILD_DIR)/$(APPS_DIR)/,$(addsuffix _end.o,$(APPS)))
+APP_IMAGE_OBJS := $(APP_OBJS) $(APP_HEADER_OBJS) $(APP_END_OBJS)
 APP_ELFS := $(addprefix $(BUILD_DIR)/$(APPS_DIR)/,$(addsuffix .elf,$(APPS)))
 APP_BINS := $(addprefix $(BUILD_DIR)/$(APPS_DIR)/,$(addsuffix .bin,$(APPS)))
 APP_BLOBS := $(addprefix $(BUILD_DIR)/$(APPS_DIR)/,$(addsuffix _blob.o,$(APPS)))
 VIRTIO_BLK_IMG := $(BUILD_DIR)/virtio-blk.img
 MKFAT32_IMAGE := $(BUILD_DIR)/tools/mkfat32_image
 
-# programs/libkarm — userland support library (syscall wrappers, crt0,
-# string helpers). The window/compositor wrappers in
-# programs/libkarmdesk are built only after every app is on libkarm;
-# their objects are intentionally not part of LIBKARM_OBJS yet.
+# programs/libkarm is the freestanding userland support library:
+# syscall trampolines, crt0, and small string/number helpers. The
+# libkarmdesk window wrappers are header-only and compile into each app.
 LIBKARM_DIR := programs/libkarm
+LIBKARM_SYSCALL_OBJ := $(BUILD_DIR)/$(LIBKARM_DIR)/syscall.o
+LIBKARM_CRT0_OBJ := $(BUILD_DIR)/$(LIBKARM_DIR)/crt0.o
+LIBKARM_STRING_OBJ := $(BUILD_DIR)/$(LIBKARM_DIR)/string.o
 LIBKARM_OBJS := \
-    $(BUILD_DIR)/$(LIBKARM_DIR)/syscall.o \
-    $(BUILD_DIR)/$(LIBKARM_DIR)/crt0.o \
-    $(BUILD_DIR)/$(LIBKARM_DIR)/string.o
+    $(LIBKARM_SYSCALL_OBJ) \
+    $(LIBKARM_CRT0_OBJ) \
+    $(LIBKARM_STRING_OBJ)
+
+# Per-app libkarm dependencies. Keep string.o out of apps that do not
+# use it; those bytes are copied into the embedded bootfs image.
+APP_LIBS_clock :=
+APP_LIBS_editor :=
+APP_LIBS_monitor := $(LIBKARM_STRING_OBJ)
+APP_LIBS_panel := $(LIBKARM_STRING_OBJ)
+APP_LIBS_shell := $(LIBKARM_STRING_OBJ)
 
 LOAD_ADDR := 0x40080000
 LOAD_ADDR_HEX := 40080000
@@ -104,11 +116,11 @@ OBJS := \
     $(BUILD_DIR)/drivers/input/virtio_input.o \
     $(BUILD_DIR)/drivers/pci/pci.o \
     $(BUILD_DIR)/drivers/usb/hid.o \
-    $(BUILD_DIR)/drivers/usb/uhci.o \
+    $(BUILD_DIR)/drivers/usb/xhci.o \
     $(BUILD_DIR)/drivers/usb/usb_core.o \
     $(BUILD_DIR)/drivers/usb/hid_driver.o
 
-DEPS := $(OBJS:.o=.d)
+DEPS := $(OBJS:.o=.d) $(APP_IMAGE_OBJS:.o=.d) $(LIBKARM_OBJS:.o=.d)
 
 .PHONY: all toolchain-check qemu-check qemu qemu-blk qemu-fb qemu-fb-visible qemu-debug qemu-net qemu-usb entry-check size clean apps libkarm
 
@@ -116,10 +128,8 @@ all: toolchain-check $(KERNEL_ELF) $(KERNEL_BIN)
 
 apps: $(APP_ELFS) $(APP_BINS)
 
-# libkarm is built standalone so its objects can be linked into any
-# userland app that has been migrated. Until an app's Makefile rule
-# is updated to depend on $(LIBKARM_OBJS), the app still links
-# against programs/apps/common.o and uses inline `svc #0`.
+# Build the standalone userland objects. Apps link the subset they use
+# explicitly below so small apps do not pull in string helpers.
 libkarm: $(LIBKARM_OBJS)
 
 toolchain-check:
@@ -165,92 +175,22 @@ $(BUILD_DIR)/$(LIBKARM_DIR)/%.o: $(LIBKARM_DIR)/%.c | $(BUILD_DIR)
 	mkdir -p $(dir $@)
 	$(CC) $(DEPFLAGS) $(USERLAND_CFLAGS) -c $< -o $@
 
-# apps that have migrated to libkarm link against the libkarm objects
-# directly instead of programs/apps/common.o. clock and monitor are
-# the first two; the rules below keep their dependency lists
-# explicit so the generic pattern rule (which still pulls in common.o
-# for the rest of the apps) does not fire for them. *_end.o is
-# linked last so the *_image_end marker sits at the tail of the flat
-# image.
-$(BUILD_DIR)/$(APPS_DIR)/clock.elf: $(BUILD_DIR)/$(APPS_DIR)/clock.o \
-    $(BUILD_DIR)/$(APPS_DIR)/clock_header.o \
-    $(BUILD_DIR)/$(LIBKARM_DIR)/syscall.o \
-    $(BUILD_DIR)/$(LIBKARM_DIR)/crt0.o \
-    $(BUILD_DIR)/$(APPS_DIR)/clock_end.o \
+# App images share one link shape. The per-app APP_LIBS_* variables add
+# optional libkarm objects through secondary expansion.
+.SECONDEXPANSION:
+$(BUILD_DIR)/$(APPS_DIR)/%.elf: $(BUILD_DIR)/$(APPS_DIR)/%.o \
+    $(BUILD_DIR)/$(APPS_DIR)/%_header.o \
+    $(LIBKARM_SYSCALL_OBJ) \
+    $(LIBKARM_CRT0_OBJ) \
+    $$(APP_LIBS_$$*) $(BUILD_DIR)/$(APPS_DIR)/%_end.o \
     $(APPS_DIR)/image.ld
 	$(LD) -T $(APPS_DIR)/image.ld -nostdlib \
-	    $(BUILD_DIR)/$(APPS_DIR)/clock.o \
-	    $(BUILD_DIR)/$(APPS_DIR)/clock_header.o \
-	    $(BUILD_DIR)/$(LIBKARM_DIR)/syscall.o \
-	    $(BUILD_DIR)/$(LIBKARM_DIR)/crt0.o \
-	    $(BUILD_DIR)/$(APPS_DIR)/clock_end.o \
+	    $(BUILD_DIR)/$(APPS_DIR)/$*.o \
+	    $(BUILD_DIR)/$(APPS_DIR)/$*_header.o \
+	    $(LIBKARM_SYSCALL_OBJ) \
+	    $(LIBKARM_CRT0_OBJ) \
+	    $(APP_LIBS_$*) $(BUILD_DIR)/$(APPS_DIR)/$*_end.o \
 	    -o $@
-
-$(BUILD_DIR)/$(APPS_DIR)/monitor.elf: $(BUILD_DIR)/$(APPS_DIR)/monitor.o \
-    $(BUILD_DIR)/$(APPS_DIR)/monitor_header.o \
-    $(BUILD_DIR)/$(LIBKARM_DIR)/syscall.o \
-    $(BUILD_DIR)/$(LIBKARM_DIR)/crt0.o \
-    $(BUILD_DIR)/$(LIBKARM_DIR)/string.o \
-    $(BUILD_DIR)/$(APPS_DIR)/monitor_end.o \
-    $(APPS_DIR)/image.ld
-	$(LD) -T $(APPS_DIR)/image.ld -nostdlib \
-	    $(BUILD_DIR)/$(APPS_DIR)/monitor.o \
-	    $(BUILD_DIR)/$(APPS_DIR)/monitor_header.o \
-	    $(BUILD_DIR)/$(LIBKARM_DIR)/syscall.o \
-	    $(BUILD_DIR)/$(LIBKARM_DIR)/crt0.o \
-	    $(BUILD_DIR)/$(LIBKARM_DIR)/string.o \
-	    $(BUILD_DIR)/$(APPS_DIR)/monitor_end.o \
-	    -o $@
-
-$(BUILD_DIR)/$(APPS_DIR)/editor.elf: $(BUILD_DIR)/$(APPS_DIR)/editor.o \
-    $(BUILD_DIR)/$(APPS_DIR)/editor_header.o \
-    $(BUILD_DIR)/$(LIBKARM_DIR)/syscall.o \
-    $(BUILD_DIR)/$(LIBKARM_DIR)/crt0.o \
-    $(BUILD_DIR)/$(APPS_DIR)/editor_end.o \
-    $(APPS_DIR)/image.ld
-	$(LD) -T $(APPS_DIR)/image.ld -nostdlib \
-	    $(BUILD_DIR)/$(APPS_DIR)/editor.o \
-	    $(BUILD_DIR)/$(APPS_DIR)/editor_header.o \
-	    $(BUILD_DIR)/$(LIBKARM_DIR)/syscall.o \
-	    $(BUILD_DIR)/$(LIBKARM_DIR)/crt0.o \
-	    $(BUILD_DIR)/$(APPS_DIR)/editor_end.o \
-	    -o $@
-
-$(BUILD_DIR)/$(APPS_DIR)/shell.elf: $(BUILD_DIR)/$(APPS_DIR)/shell.o \
-    $(BUILD_DIR)/$(APPS_DIR)/shell_header.o \
-    $(BUILD_DIR)/$(LIBKARM_DIR)/syscall.o \
-    $(BUILD_DIR)/$(LIBKARM_DIR)/crt0.o \
-    $(BUILD_DIR)/$(LIBKARM_DIR)/string.o \
-    $(BUILD_DIR)/$(APPS_DIR)/shell_end.o \
-    $(APPS_DIR)/image.ld
-	$(LD) -T $(APPS_DIR)/image.ld -nostdlib \
-	    $(BUILD_DIR)/$(APPS_DIR)/shell.o \
-	    $(BUILD_DIR)/$(APPS_DIR)/shell_header.o \
-	    $(BUILD_DIR)/$(LIBKARM_DIR)/syscall.o \
-	    $(BUILD_DIR)/$(LIBKARM_DIR)/crt0.o \
-	    $(BUILD_DIR)/$(LIBKARM_DIR)/string.o \
-	    $(BUILD_DIR)/$(APPS_DIR)/shell_end.o \
-	    -o $@
-
-$(BUILD_DIR)/$(APPS_DIR)/panel.elf: $(BUILD_DIR)/$(APPS_DIR)/panel.o \
-    $(BUILD_DIR)/$(APPS_DIR)/panel_header.o \
-    $(BUILD_DIR)/$(LIBKARM_DIR)/syscall.o \
-    $(BUILD_DIR)/$(LIBKARM_DIR)/crt0.o \
-    $(BUILD_DIR)/$(LIBKARM_DIR)/string.o \
-    $(BUILD_DIR)/$(APPS_DIR)/panel_end.o \
-    $(APPS_DIR)/image.ld
-	$(LD) -T $(APPS_DIR)/image.ld -nostdlib \
-	    $(BUILD_DIR)/$(APPS_DIR)/panel.o \
-	    $(BUILD_DIR)/$(APPS_DIR)/panel_header.o \
-	    $(BUILD_DIR)/$(LIBKARM_DIR)/syscall.o \
-	    $(BUILD_DIR)/$(LIBKARM_DIR)/crt0.o \
-	    $(BUILD_DIR)/$(LIBKARM_DIR)/string.o \
-	    $(BUILD_DIR)/$(APPS_DIR)/panel_end.o \
-	    -o $@
-
-$(BUILD_DIR)/$(APPS_DIR)/%.elf: $(BUILD_DIR)/$(APPS_DIR)/%.o $(APPS_COMMON_OBJ) $(APPS_DIR)/image.ld
-	$(LD) -T $(APPS_DIR)/image.ld -nostdlib \
-	    $(BUILD_DIR)/$(APPS_DIR)/$*.o $(APPS_COMMON_OBJ) -o $@
 
 $(BUILD_DIR)/$(APPS_DIR)/%.bin: $(BUILD_DIR)/$(APPS_DIR)/%.elf
 	$(OBJCOPY) -O binary $< $@
@@ -318,9 +258,9 @@ qemu-usb: qemu-check entry-check $(KERNEL_BIN)
 	qemu-system-aarch64 -machine virt -cpu cortex-a72 -m 128M -nographic \
 	    -global virtio-mmio.force-legacy=false \
 	    -kernel $(KERNEL_BIN) \
-	    -device piix3-usb-uhci \
-	    -device usb-kbd \
-	    -device usb-mouse
+	    -device qemu-xhci,id=xhci \
+	    -device usb-kbd,bus=xhci.0 \
+	    -device usb-mouse,bus=xhci.0
 
 size: $(KERNEL_ELF) $(KERNEL_BIN)
 	$(SIZE) $(KERNEL_ELF)

@@ -243,6 +243,7 @@ void test_hid_state_count_field_is_accessible(void);
 void test_hid_max_devices_constant_is_sane(void);
 void test_hid_init_registers_mouse_protocol(void);
 void test_hid_init_zeroes_prev_keys_for_new_device(void);
+void test_hid_add_device_appends_and_copies_usb_handle(void);
 void test_hid_init_returns_zero_when_no_boot_interfaces(void);
 void test_hid_init_returns_zero_for_null_state(void);
 void test_hid_init_keeps_max_four_devices(void);
@@ -525,6 +526,7 @@ int main(void) {
     RUN_TEST(test_hid_max_devices_constant_is_sane);
     RUN_TEST(test_hid_init_registers_mouse_protocol);
     RUN_TEST(test_hid_init_zeroes_prev_keys_for_new_device);
+    RUN_TEST(test_hid_add_device_appends_and_copies_usb_handle);
     RUN_TEST(test_hid_init_returns_zero_when_no_boot_interfaces);
     RUN_TEST(test_hid_init_returns_zero_for_null_state);
     RUN_TEST(test_hid_init_keeps_max_four_devices);

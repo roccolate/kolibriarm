@@ -6,10 +6,9 @@
 // syscall number from <kernel/syscall_numbers.h> and dispatches
 // through the raw trampolines in syscall.S.
 //
-// The window/compositor syscalls (70..80) intentionally live in
-// programs/libkarmdesk, not here, because that range is the one still
-// actively growing (sys_window_get_bounds, sys_window_set_bounds, and
-// the resize event are reserved but unimplemented).
+// The window/compositor syscalls (70..86) intentionally live in
+// programs/libkarmdesk, not here. That keeps desktop wrappers separate
+// from the stable process / memory / I/O / IPC surface.
 //
 // Return value: the raw `long` returned by the kernel. >= 0 on
 // success; negative values are error codes from <errno.h>.
@@ -34,6 +33,8 @@ long __syscall3(long n, long a0, long a1, long a2);
 long __syscall4(long n, long a0, long a1, long a2, long a3);
 long __syscall5(long n, long a0, long a1, long a2, long a3, long a4);
 long __syscall6(long n, long a0, long a1, long a2, long a3, long a4, long a5);
+long __syscall7(long n, long a0, long a1, long a2, long a3, long a4,
+                long a5, long a6);
 
 // Process ----------------------------------------------------------------
 

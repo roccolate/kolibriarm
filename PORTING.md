@@ -27,6 +27,11 @@ The following components are board-specific and should live behind `drivers/boar
 
 **Current note:** QEMU `virt` is the reference board under `drivers/boards/qemu_virt/`. Its board layer owns the early UART init, GIC init, UART IRQ number, and MMIO mappings needed by the identity page table.
 
+**USB note:** the active USB backend is the generic PCI xHCI driver under
+`drivers/usb/`. QEMU `virt` reaches it through ECAM + PCI BAR assignment.
+Raspberry Pi 4 still needs BCM2711 PCIe host bridge setup in
+`drivers/boards/rpi4/` before the VL805 xHCI controller can be discovered.
+
 **Next portability step:** keep moving new board-specific devices behind `drivers/boards/<board>/` helpers instead of adding raw MMIO addresses to generic kernel code.
 
 ---

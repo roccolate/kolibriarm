@@ -3,8 +3,8 @@
 
 #include <stdint.h>
 
-#include "usb/uhci.h"
 #include "usb/usb.h"
+#include "usb/xhci.h"
 
 /*
  * USB enumeration core. This module owns the descriptor walking and
@@ -16,9 +16,8 @@
  *   - usb_get_config_descriptor(...)     — full configuration blob
  *
  * The actual USB bus transfer is performed by the host controller
- * driver (UHCI today, possibly XHCI later). usb_core.c calls into
- * uhci_control_transfer through a function pointer so the core
- * itself stays bus-agnostic.
+ * driver. usb_core.c calls into the installed controller through a
+ * function pointer so the descriptor parser itself stays bus-agnostic.
  *
  * The descriptor walkers (`usb_find_interface`, `usb_find_endpoint`,
  * `usb_find_hid`) are pure C: they walk a single configuration
@@ -52,6 +51,11 @@ typedef struct {
     usb_interface_ref_t interfaces[USB_MAX_INTERFACES];
     const void *buffer_end;
 } usb_config_walk_t;
+
+typedef struct {
+    xhci_device_t xhci;
+    uint8_t address;
+} usb_device_t;
 
 typedef int (*usb_control_xfer_fn)(void *ctx, const usb_setup_t *setup,
                                    void *data, uint16_t data_len);
@@ -87,7 +91,7 @@ const usb_interface_ref_t *usb_find_interface(const usb_config_walk_t *walk,
 const usb_endpoint_ref_t *usb_find_endpoint_in(
     const usb_interface_ref_t *iface, uint16_t max_packet);
 
-/* Boot the USB stack: probe PCI for UHCI controllers, initialize the
+/* Boot the USB stack: probe PCI for xHCI controllers, initialize the
  * first one, reset its ports, and install the control transfer
  * callback so subsequent usb_set_address / usb_get_device_descriptor
  * calls work. Returns the number of controllers found. */
@@ -97,15 +101,21 @@ uint32_t usb_init(void);
  * Returns 1 if a device is detected after reset, 0 otherwise. */
 int usb_port_reset(uint8_t port_index);
 
+/* Return the active controller's root-hub port count. */
+uint8_t usb_port_count(void);
+
 /* Return the active controller (set by usb_init) so class drivers
  * can talk to the bus. Returns NULL if no controller is up. */
-uhci_controller_t *usb_active_controller(void);
+xhci_controller_t *usb_active_controller(void);
 
 /* Issue the currently installed control transfer. Exposed for HID
  * class requests (SET_PROTOCOL, GET_REPORT) that need to bypass
  * the standard request wrappers. */
 int usb_installed_xfer(const usb_setup_t *setup, void *data,
                        uint16_t data_len);
+
+int usb_device_xfer(usb_device_t *dev, const usb_setup_t *setup,
+                    void *data, uint16_t data_len);
 
 /* Run the standard enumeration flow on the default-address pipe:
  * SET_ADDRESS(addr), GET_DESCRIPTOR (device), GET_DESCRIPTOR
@@ -114,5 +124,10 @@ int usb_installed_xfer(const usb_setup_t *setup, void *data,
 int usb_enumerate_default_device(uint8_t address, uint8_t config_value,
                                  void *buffer, uint16_t buffer_len,
                                  usb_config_walk_t *out);
+
+int usb_enumerate_port(uint8_t port_index, uint8_t address,
+                       uint8_t config_value, void *buffer,
+                       uint16_t buffer_len, usb_device_t *dev,
+                       usb_config_walk_t *out);
 
 #endif

@@ -34,6 +34,7 @@
 #define PCI_CLASS_DISPLAY   0x0300U
 #define PCI_CLASS_HID       0x0900U /* Boot interface subclass 0x01 */
 #define PCI_CLASS_USB        0x0C03U /* Serial bus, USB */
+#define PCI_USB_PROGIF_XHCI  0x30U
 
 /* Standard config space registers. */
 #define PCI_CFG_VENDOR       0x00U
@@ -68,6 +69,7 @@ typedef struct {
     uint16_t vendor_id;
     uint16_t device_id;
     uint16_t class_code;
+    uint8_t prog_if;
     uint8_t header_type;
     uint32_t bar[6];
 } pci_device_t;

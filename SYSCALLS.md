@@ -10,12 +10,15 @@ numbers reserved for the planned ABI.
 ```
 Instruction:  svc #0
 Syscall #:    x8
-Arguments:    x0, x1, x2, x3, x4, x5  (up to 6)
+Arguments:    x0, x1, x2, x3, x4, x5, x6  (up to 7)
 Return value: x0  (negative = error code)
 ```
 
 For a syscall that returns to the same process, all registers except `x0` are
 preserved. `x0` carries the return value.
+
+`x7` is caller-saved scratch under the AArch64 procedure-call ABI, but it is
+not a KolibriARM syscall argument register today.
 
 ---
 
@@ -158,13 +161,15 @@ Current limitations:
 | 80 | `sys_window_flush` | `x0=window_id, x1=x, x2=y, x3=w, x4=h` | 0 / error | Push a content-local damage rect; the compositor partial-redraws only that region |
 | 81 | `sys_window_get_bounds` | `x0=window_id, x1=out_ptr` | 0 / error | Copy the window's `(x, y, w, h)` into the caller's 16-byte buffer as four `uint32_t` values; only the owner may read another process's window bounds |
 | 82 | `sys_window_set_bounds` | `x0=window_id, x1=x, x2=y, x3=w, x4=h` | 0 / error | Move and/or resize the window in one step; if `(w, h)` changes the kernel reallocates the per-window backing and pushes `GUI_EVENT_RESIZE` onto the owner's event queue |
-| 83 | `sys_window_minimize` | `x0=window_id` | 0 / error | Owner-only: hide the window through the same path the kernel-drawn minimise button uses; pushes `GUI_EVENT_MINIMIZE` onto the owner's queue |
+| 83 | `sys_window_minimize` | `x0=window_id` | 0 / error | Owner-only: hide the window through the same path the kernel-drawn minimize button uses; pushes `GUI_EVENT_MINIMIZE` onto the owner's queue |
 | 84 | `sys_window_restore` | `x0=window_id` | 0 / error | Owner-only: inverse of `sys_window_minimize`; clears the hidden flag, raises the window, and pushes `GUI_EVENT_MAXIMIZE` |
-| 85 | `sys_window_state` | `x0=window_id, x1=out_ptr` | 0 / error | Owner-only: write a 32-bit state bitmap into the caller's buffer; bit 0 = minimised, bit 1 = currently focused |
+| 85 | `sys_window_state` | `x0=window_id, x1=out_ptr` | 0 / error | Owner-only: write a 32-bit state bitmap into the caller's buffer; bit 0 = minimized, bit 1 = currently focused |
 | 86 | `sys_cursor_register_region` | `x0=window_id, x1=slot, x2=x, x3=y, x4=w, x5=h, x6=shape` | 0 / error | Owner-only: install or replace a per-window cursor-shape region. Slot 0..7; the kernel walks the slots in ascending order during cursor refresh and the first region whose content-local rect contains the cursor wins over the kernel title-bar default. Pass `x6=0xffffffff` to clear the slot. |
 
 Current limitations:
-- These syscalls are the early desktop ABI, not a stable long-term ABI.
+- The implemented desktop ABI is frozen for this milestone. New desktop calls
+  must be appended with new syscall numbers; existing numbers and argument
+  registers must not be reused.
 - Window ownership is enforced with the current process pid for draw,
   destroy, and set-title. `sys_window_focus` and `sys_window_for_pid`
   are deliberately callable from any pid so the desktop taskbar (a

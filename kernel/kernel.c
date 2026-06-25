@@ -356,36 +356,38 @@ static void init_input(void) {
     }
     if (usb_init() > 0) {
         uart_puts("USB: controller initialized\n");
-        if (usb_port_reset(0) > 0) {
-            uart_puts("USB: device on port 0\n");
-        }
-        if (usb_port_reset(1) > 0) {
-            uart_puts("USB: device on port 1\n");
-        }
-        /* Try to enumerate the first device at the default address.
-         * The HID driver will register any boot-protocol devices it
-         * finds, and the input thread will then poll them. */
-        uint8_t config_buf[256];
-        usb_config_walk_t walk;
-        if (usb_enumerate_default_device(1, 1, config_buf,
-                                         sizeof(config_buf), &walk) == 0) {
-            uart_puts("USB: enumeration ok\n");
-            usb_hid_state_reset();
-            uint8_t hid_count = usb_hid_init(&g_usb_hid_state, &walk);
-            if (hid_count > 0) {
-                uart_puts("USB HID: ");
-                uart_putc('0' + (char)hid_count);
-                uart_puts(" devices\n");
-                for (uint8_t i = 0; i < g_usb_hid_state.count; i++) {
-                    g_usb_hid_state.devices[i].device_address = 1;
-                    usb_hid_set_protocol_boot(
-                        g_usb_hid_state.devices[i].endpoint_in);
+        usb_hid_state_reset();
+        uint8_t usb_ports = usb_port_count();
+        uint8_t usb_address = 1;
+        for (uint8_t port = 0; port < usb_ports; port++) {
+            if (usb_port_reset(port) > 0) {
+                uart_puts("USB: device on port ");
+                print_dec64(port);
+                uart_puts("\n");
+
+                uint8_t config_buf[256];
+                usb_config_walk_t walk;
+                usb_device_t dev;
+                if (usb_enumerate_port(port, usb_address, 1, config_buf,
+                                       sizeof(config_buf), &dev, &walk) == 0) {
+                    uart_puts("USB: enumeration ok\n");
+                    uint8_t before = g_usb_hid_state.count;
+                    (void)usb_hid_add_device(&g_usb_hid_state, &walk, &dev);
+                    for (uint8_t i = before; i < g_usb_hid_state.count; i++) {
+                        usb_hid_set_protocol_boot(&g_usb_hid_state.devices[i]);
+                    }
+                    usb_address++;
+                } else {
+                    uart_puts("USB: enumeration skipped\n");
                 }
-            } else {
-                uart_puts("USB HID: no boot-protocol devices\n");
             }
+        }
+        if (g_usb_hid_state.count > 0) {
+            uart_puts("USB HID: ");
+            uart_putc('0' + (char)g_usb_hid_state.count);
+            uart_puts(" devices\n");
         } else {
-            uart_puts("USB: enumeration skipped\n");
+            uart_puts("USB HID: no boot-protocol devices\n");
         }
     }
 }

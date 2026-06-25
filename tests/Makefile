@@ -39,7 +39,7 @@ SRCS=unity/unity.c main.c \
      ../drivers/fb/fb.c ../drivers/storage/virtio_blk.c \
      ../drivers/input/input.c \
      ../drivers/usb/hid.c ../drivers/usb/hid_driver.c \
-     ../drivers/usb/uhci.c ../drivers/usb/usb_core.c \
+     ../drivers/usb/xhci.c ../drivers/usb/usb_core.c \
      ../drivers/pci/pci.c test_pl011_stub.c test_panel_boot_recovery_stub.c \
      $(APP_BLOB_OBJS)
 

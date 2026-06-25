@@ -16,7 +16,7 @@
  * input queue virtio-input and UART input use. The driver exposes:
  *
  *   - `usb_hid_init(ctrl)`: walk a configuration descriptor blob and
- *      configure a UHCI controller for the keyboard or mouse found.
+ *      record the boot keyboard or mouse endpoint metadata.
  *   - `usb_hid_poll(ctrl)`: drain pending boot reports and produce
  *      events. Returns the number of events pushed (0 if none).
  *
@@ -30,8 +30,11 @@
 typedef struct {
     uint8_t device_address;
     uint8_t protocol;     /* 0x01 = keyboard, 0x02 = mouse */
+    uint8_t interface_number;
     uint8_t endpoint_in;  /* Endpoint number (without direction bit) */
+    uint8_t interval;
     uint16_t max_packet;
+    usb_device_t usb_device;
     uint8_t prev_keys[6]; /* Last keyboard report's keycodes */
     uint8_t prev_buttons; /* Last mouse report's button byte */
 } usb_hid_device_t;
@@ -45,6 +48,11 @@ typedef struct {
  * returned by `usb_get_config_descriptor` / `usb_walk_configuration`.
  * Returns the number of HID devices registered. */
 uint8_t usb_hid_init(usb_hid_state_t *state, const usb_config_walk_t *walk);
+
+/* Append boot HID interfaces from `walk` to an existing state. */
+uint8_t usb_hid_add_device(usb_hid_state_t *state,
+                           const usb_config_walk_t *walk,
+                           const usb_device_t *usb_device);
 
 /* Convert a single boot keyboard report into a sequence of key events
  * (max 6 per report). Existing keys not present in the new report
@@ -77,9 +85,7 @@ int usb_hid_poll_all(void);
 /* Reset the kernel-wide HID state. */
 void usb_hid_state_reset(void);
 
-/* Send HID SET_PROTOCOL=0 (boot) to a HID device. The endpoint
- * parameter is the device's interrupt-in endpoint number (the
- * function uses it as wIndex in the class request). */
-int usb_hid_set_protocol_boot(uint8_t endpoint_in);
+/* Send HID SET_PROTOCOL=0 (boot) to a HID interface. */
+int usb_hid_set_protocol_boot(usb_hid_device_t *dev);
 
 #endif

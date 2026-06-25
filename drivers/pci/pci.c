@@ -100,6 +100,7 @@ uint32_t pci_enumerate(pci_device_t *out_devices, uint32_t max_devices) {
                  * 16-23 = subclass, 24-31 = class. We pack class|class_code
                  * into a 16-bit field. */
                 d->class_code = (uint16_t)(class_rev >> 16);
+                d->prog_if = (uint8_t)(class_rev >> 8);
                 d->header_type = (uint8_t)(
                     pci_config_read8(bus, device, func, PCI_CFG_HDR_TYPE) &
                     PCI_HDR_TYPE_MASK);
@@ -155,10 +156,10 @@ uint32_t pci_assign_bars(pci_device_t *devices, uint32_t device_count,
             if (probe == 0U) {
                 continue;
             }
-            uint32_t type = probe & 0x0FU;
-            /* Only handle 32-bit MMIO BARs (type 0x00) and
-             * prefetchable 32-bit MMIO (type 0x04). */
-            if (type != 0x00U && type != 0x04U) {
+            uint32_t flags = probe & 0x0FU;
+            uint32_t mem_type = probe & 0x06U;
+            /* Only handle 32-bit and 64-bit MMIO BARs. */
+            if (mem_type != 0x00U && mem_type != 0x04U) {
                 continue;
             }
             uint32_t size_mask = probe & 0xFFFFFFF0U;
@@ -173,8 +174,14 @@ uint32_t pci_assign_bars(pci_device_t *devices, uint32_t device_count,
             /* Align the cursor to the size. */
             uint32_t aligned = (cursor + size - 1U) & ~(size - 1U);
             pci_config_write32(d->bus, d->device, d->function, reg,
-                               aligned | type);
-            d->bar[b] = aligned | type;
+                               aligned | flags);
+            d->bar[b] = aligned | flags;
+            if (mem_type == 0x04U && b + 1U < 6U) {
+                pci_config_write32(d->bus, d->device, d->function,
+                                   (uint8_t)(reg + 4U), 0);
+                d->bar[b + 1U] = 0;
+                b++;
+            }
             cursor = aligned + size;
             assigned++;
         }

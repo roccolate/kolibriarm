@@ -5,7 +5,7 @@
 [![License: GPL-2.0](https://img.shields.io/badge/License-GPL%202.0-blue.svg)](LICENSE)
 [![Architecture](https://img.shields.io/badge/arch-AArch64-green.svg)]()
 [![Language](https://img.shields.io/badge/lang-C%20%2B%20ASM-orange.svg)]()
-[![Status](https://img.shields.io/badge/status-pre--alpha-red.svg)]()
+[![Status](https://img.shields.io/badge/status-QEMU%20desktop-blue.svg)]()
 
 ---
 
@@ -17,28 +17,27 @@ KolibriARM is a bare-metal operating system for ARM64 (AArch64) processors, writ
 - Every byte is intentional. No unnecessary abstraction layers.
 - The kernel fits in your head. Small enough to read in a weekend.
 - No libc. No POSIX. No Linux compatibility layer. Just clean system calls.
-- Boots in under 3 seconds on real hardware.
-- Runs comfortably on 64 MB of RAM.
+- Keep boot fast and observable on QEMU before claiming hardware numbers.
+- Keep the memory footprint small enough for constrained ARM boards.
 
 ---
 
 ## Current Status
 
-> **Pre-alpha foundations plus a first graphical desktop.** The kernel boots
-> on QEMU `virt`, brings up memory management, enables an identity-mapped MMU,
-> runs EL0 app processes with syscall and timer-IRQ context switches, and
-> keeps the minimal `k>` debug console as a fallback. With `make qemu-blk`,
-> QEMU boots with a generated FAT32 virtio-blk image and reloads apps through
-> the VFS path.
+> **A functional QEMU desktop for a small AArch64 OS.** The kernel boots on
+> QEMU `virt`, brings up memory management, enables an identity-mapped MMU,
+> runs EL0 app processes with syscall and timer-IRQ context switches, and keeps
+> the minimal `k>` debug console as a fallback. With `make qemu-blk`, QEMU
+> boots with a generated FAT32 virtio-blk image and reloads apps through the
+> VFS path.
 >
-> The "userland" today is a small set of flat AArch64 assembly app images
-> under `programs/apps/`, embedded through bootfs and exposed under
-> `/kolibri/<name>`. The GUI is an experimental kernel compositor with early
-> per-process window ownership, a panel process, cursor/focus/drag handling,
-> and a few windowed apps. It is close to an alpha desktop, but not there yet:
-> redraw/expose handling is rough and interactive QEMU checks still need to be
-> made reliable. See
-> [ROADMAP.md](ROADMAP.md) for the honest state and the path forward.
+> Userland apps are freestanding C programs built as flat AArch64 images under
+> `programs/apps/`, linked with `programs/libkarm` and
+> `programs/libkarmdesk`, embedded through bootfs, and exposed under
+> `/kolibri/<name>`. The QEMU desktop has per-process window ownership,
+> a panel taskbar, shell / editor / monitor / clock apps, cursor/focus/drag
+> handling, per-window backing buffers, and rect-based redraw. See
+> [ROADMAP.md](ROADMAP.md) for what is still missing.
 
 | Component         | Status       | Notes                                  |
 |-------------------|-------------|----------------------------------------|
@@ -48,13 +47,13 @@ KolibriARM is a bare-metal operating system for ARM64 (AArch64) processors, writ
 | Scheduler         | Working      | Round-robin, timer IRQ, kernel + EL0 threads |
 | IRQ dispatch      | Working      | GICv2, timer PPI, UART RX, C handler table |
 | UART driver       | Working      | PL011 TX polling, RX IRQ ring, QEMU console input echo |
-| Syscalls          | Working      | process, memory, VFS, IPC, info, early window syscalls |
-| Userland          | Early apps   | Flat asm apps under `programs/apps/`; no C userland libraries yet |
+| Syscalls          | Working      | frozen implemented ABI for process, memory, VFS, IPC, info, window/compositor |
+| Userland          | Working      | Freestanding C EL0 apps with `libkarm`, `libkarmdesk`, and shared `crt0` |
 | Framebuffer       | Working      | virtio-gpu scanout, primitives, bitmap text, alpha |
 | Storage           | Working      | virtio-blk sector read/write, FAT32 read + limited overwrite |
 | Filesystem        | Working      | Fixed VFS, bootfs seed, tmpfs, FAT32 root 8.3 lookup |
-| GUI               | Experimental | Kernel compositor has window ownership, focus, cursor, drag, title-bar close, and early window syscalls |
-| Mouse / cursor    | Partial      | virtio-input and UART command events are routed to the GUI; cursor switches to hand over title decorations and panel buttons |
+| GUI               | Working      | Kernel compositor has owner windows, panel/taskbar, backing buffers, title bars, damage rects, and app events |
+| Mouse / cursor    | Working      | virtio-input, USB HID, cursor movement, drag, click-to-raise, and hand regions |
 | Networking        | Working      | from-scratch virtio-net + DHCP, polled by the console thread |
 | RPi 4 port        | Builds       | Not booted on real hardware yet |
 
@@ -79,31 +78,27 @@ The current milestone is **Phase 10 — a real desktop**. Read
       for our native `KLI1` header. The KolibriOS-style KOS image loader is
       exercised by the in-tree flat-image tests.
 - [x] USB HID foundations: PCI ECAM scan + BAR auto-assignment,
-      UHCI driver with real control and interrupt-in transfers,
+      xHCI poll-mode driver with real control and interrupt-in transfers,
       boot-protocol HID report parser, descriptor walker, and a
       kernel-wide poll loop that feeds the existing `input_queue`.
       `make qemu-usb` boots the kernel with `qemu-xhci + usb-kbd +
       usb-mouse` and reaches `USB: controller initialized` /
-      `USB: device on port 0/1`. Full HID event delivery needs a
-      UHCI controller with MMIO BARs (QEMU virt's `piix3-usb-uhci`
-      is I/O-only; RPi 4 or a custom QEMU machine expose one).
+      `USB: device on port ...` / `USB: enumeration ok` / `USB HID:
+      2 devices`.
 
-Out of scope until the desktop is real:
+Still out of scope:
 - SMP, full FAT32 write (drivers/fat32 already supports create/
   delete/rename + chain grow), real HTTP client.
-- XHCI driver (the kernel speaks UHCI today; an XHCI port is the
-  obvious next step because the QEMU virt machine defaults to
-  XHCI and most modern hardware does too).
-- I/O-space PCI BARs (UHCI on QEMU aarch64 virt is I/O-only;
-  current driver only handles MMIO BARs).
-- RPi 4 hardware bring-up (it builds, but it is not the active target).
+- USB hub support.
+- RPi 4 hardware bring-up (it builds, but PCIe host bridge setup for
+  the VL805 xHCI controller is not wired yet).
 
 ---
 
 ## Target Hardware
 
 **Primary target:** QEMU `virt` machine (AArch64, Cortex-A72)
-**Secondary target:** Raspberry Pi 4 / 5 (BCM2711 / BCM2712)
+**Planned hardware target:** Raspberry Pi 4 / 5 (BCM2711 / BCM2712)
 **Future targets:** Any Cortex-A board with open peripheral documentation
 
 ---
@@ -133,7 +128,7 @@ sudo apt update && sudo apt install -y \
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourname/kolibriarm
+git clone https://github.com/roccolate/kolibriarm
 cd kolibriarm
 
 # Build the default QEMU virt board
@@ -171,9 +166,9 @@ make qemu-fb-visible
 
 # Run in QEMU with a USB host (qemu-xhci + usb-kbd + usb-mouse).
 # The kernel prints "USB: controller initialized" and
-# "USB: device on port 0/1" as it walks the ECAM and probes the
-# controller. Live HID event delivery needs a UHCI controller with
-# MMIO BARs; on QEMU aarch64 virt piix3-usb-uhci is I/O-only.
+# "USB: device on port ..." as it walks the xHCI root hub, then
+# "USB: enumeration ok" and "USB HID: 2 devices" for the directly
+# attached boot-protocol keyboard and mouse.
 make qemu-usb
 
 # Exit QEMU: Ctrl+A then X
@@ -199,7 +194,7 @@ gdb-multiarch build/kernel.elf
 ```
 kolibriarm/
 ├── boot/               # Bootloader (AArch64 ASM only)
-│   └── start.S         # Entry point, MMU init, jump to kernel
+│   └── start.S         # Entry point, early stack, BSS clear, jump to kernel
 ├── kernel/             # Kernel core (C + inline ASM)
 │   ├── kernel.c        # kernel_main, early init
 │   ├── mm/             # Memory management
@@ -242,7 +237,7 @@ AArch64 (ARM64) is the cleanest ISA to write an OS in from scratch:
 
 ### Why no POSIX?
 
-POSIX compatibility layers add complexity without adding value for a purpose-built OS. KolibriARM defines its own minimal syscall ABI (inspired by KolibriOS's ~100-syscall design), using the `svc` instruction with function number in `x8` and arguments in `x0`–`x7`. This keeps the kernel small and the syscall path fast.
+POSIX compatibility layers add complexity without adding value for a purpose-built OS. KolibriARM defines its own minimal syscall ABI (inspired by KolibriOS's ~100-syscall design), using the `svc` instruction with function number in `x8` and arguments in `x0`–`x6`. This keeps the kernel small and the syscall path fast.
 
 ### Why C + ASM and not Rust?
 

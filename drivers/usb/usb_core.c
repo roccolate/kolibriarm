@@ -3,10 +3,11 @@
 #include <stdint.h>
 
 #include "usb/hid.h"
-#include "usb/uhci.h"
+#include "usb/xhci.h"
 
 static usb_control_xfer_fn g_xfer_fn;
 static void *g_xfer_ctx;
+static xhci_controller_t *g_active_ctrl;
 
 void usb_install_controller(usb_control_xfer_fn fn, void *ctx) {
     g_xfer_fn = fn;
@@ -55,6 +56,80 @@ int usb_installed_xfer(const usb_setup_t *setup, void *data,
     return xfer(setup, data, data_len);
 }
 
+int usb_device_xfer(usb_device_t *dev, const usb_setup_t *setup,
+                    void *data, uint16_t data_len) {
+    if (dev == 0 || setup == 0) {
+        return -1;
+    }
+    return xhci_control_transfer_device(&dev->xhci, setup,
+                                        (uint8_t)sizeof(usb_setup_t),
+                                        data, data_len);
+}
+
+static int usb_device_get_device_descriptor(usb_device_t *dev,
+                                            usb_device_descriptor_t *out) {
+    usb_setup_t setup;
+    setup.bmRequestType = 0x80U;
+    setup.bRequest = USB_REQ_GET_DESCRIPTOR;
+    setup.wValue = (uint16_t)((USB_DESC_DEVICE << 8) | 0);
+    setup.wIndex = 0;
+    setup.wLength = (uint16_t)sizeof(usb_device_descriptor_t);
+    return usb_device_xfer(dev, &setup, out,
+                           (uint16_t)sizeof(usb_device_descriptor_t));
+}
+
+static int usb_device_set_configuration(usb_device_t *dev, uint8_t value) {
+    usb_setup_t setup;
+    setup.bmRequestType = 0x00U;
+    setup.bRequest = USB_REQ_SET_CONFIGURATION;
+    setup.wValue = (uint16_t)value;
+    setup.wIndex = 0;
+    setup.wLength = 0;
+    return usb_device_xfer(dev, &setup, 0, 0);
+}
+
+static int usb_device_get_config_descriptor(usb_device_t *dev,
+                                            uint8_t index, void *buffer,
+                                            uint16_t buffer_len,
+                                            usb_config_walk_t *out) {
+    if (buffer == 0 || out == 0 ||
+        buffer_len < sizeof(usb_config_descriptor_t)) {
+        return -1;
+    }
+
+    usb_setup_t setup;
+    setup.bmRequestType = 0x80U;
+    setup.bRequest = USB_REQ_GET_DESCRIPTOR;
+    setup.wValue = (uint16_t)((USB_DESC_CONFIGURATION << 8) | index);
+    setup.wIndex = 0;
+    setup.wLength = (uint16_t)sizeof(usb_config_descriptor_t);
+    int rc = usb_device_xfer(dev, &setup, buffer,
+                             (uint16_t)sizeof(usb_config_descriptor_t));
+    if (rc < 0) {
+        return rc;
+    }
+
+    const usb_config_descriptor_t *config =
+        (const usb_config_descriptor_t *)buffer;
+    if (config->bLength < sizeof(usb_config_descriptor_t) ||
+        config->bDescriptorType != USB_DESC_CONFIGURATION ||
+        config->wTotalLength < config->bLength) {
+        return -1;
+    }
+
+    uint16_t total = config->wTotalLength;
+    if (total > buffer_len) {
+        total = buffer_len;
+    }
+
+    setup.wLength = total;
+    rc = usb_device_xfer(dev, &setup, buffer, total);
+    if (rc < 0) {
+        return rc;
+    }
+    return usb_walk_configuration(buffer, total, out);
+}
+
 int usb_enumerate_default_device(uint8_t address, uint8_t config_value,
                                  void *buffer, uint16_t buffer_len,
                                  usb_config_walk_t *out) {
@@ -76,6 +151,34 @@ int usb_enumerate_default_device(uint8_t address, uint8_t config_value,
     }
     /* Step 4: SET_CONFIGURATION. */
     if (usb_set_configuration(config_value) < 0) {
+        return -1;
+    }
+    return 0;
+}
+
+int usb_enumerate_port(uint8_t port_index, uint8_t address,
+                       uint8_t config_value, void *buffer,
+                       uint16_t buffer_len, usb_device_t *dev,
+                       usb_config_walk_t *out) {
+    if (g_active_ctrl == 0 || buffer == 0 || dev == 0 || out == 0) {
+        return -1;
+    }
+
+    if (xhci_address_device(g_active_ctrl, port_index, address,
+                            &dev->xhci) != 0) {
+        return -1;
+    }
+    dev->address = address;
+
+    usb_device_descriptor_t desc;
+    if (usb_device_get_device_descriptor(dev, &desc) < 0) {
+        return -1;
+    }
+    if (usb_device_get_config_descriptor(dev, 0, buffer,
+                                         buffer_len, out) < 0) {
+        return -1;
+    }
+    if (usb_device_set_configuration(dev, config_value) < 0) {
         return -1;
     }
     return 0;
@@ -150,17 +253,42 @@ int usb_walk_configuration(const void *buffer, uint16_t buffer_len,
 
 int usb_get_config_descriptor(uint8_t index, void *buffer,
                               uint16_t buffer_len, usb_config_walk_t *out) {
+    if (buffer == 0 || out == 0 ||
+        buffer_len < sizeof(usb_config_descriptor_t)) {
+        return -1;
+    }
+
     usb_setup_t setup;
     setup.bmRequestType = 0x80U;
     setup.bRequest = USB_REQ_GET_DESCRIPTOR;
     setup.wValue = (uint16_t)((USB_DESC_CONFIGURATION << 8) | index);
     setup.wIndex = 0;
-    setup.wLength = buffer_len;
-    int rc = xfer(&setup, buffer, buffer_len);
+    setup.wLength = (uint16_t)sizeof(usb_config_descriptor_t);
+    int rc = xfer(&setup, buffer,
+                  (uint16_t)sizeof(usb_config_descriptor_t));
     if (rc < 0) {
         return rc;
     }
-    return usb_walk_configuration(buffer, buffer_len, out);
+
+    const usb_config_descriptor_t *config =
+        (const usb_config_descriptor_t *)buffer;
+    if (config->bLength < sizeof(usb_config_descriptor_t) ||
+        config->bDescriptorType != USB_DESC_CONFIGURATION ||
+        config->wTotalLength < config->bLength) {
+        return -1;
+    }
+
+    uint16_t total = config->wTotalLength;
+    if (total > buffer_len) {
+        total = buffer_len;
+    }
+
+    setup.wLength = total;
+    rc = xfer(&setup, buffer, total);
+    if (rc < 0) {
+        return rc;
+    }
+    return usb_walk_configuration(buffer, total, out);
 }
 
 const usb_interface_ref_t *usb_find_interface(const usb_config_walk_t *walk,
@@ -197,39 +325,32 @@ const usb_endpoint_ref_t *usb_find_endpoint_in(
     return 0;
 }
 
-/* Hold a single controller handle so usb_init + usb_port_reset can
- * use it after the UHCI scan. */
-static uhci_controller_t *g_active_ctrl;
-
-uhci_controller_t *usb_active_controller(void) {
+xhci_controller_t *usb_active_controller(void) {
     return g_active_ctrl;
 }
 
-static int uhci_xfer_trampoline(void *ctx, const usb_setup_t *setup,
+static int xhci_xfer_trampoline(void *ctx, const usb_setup_t *setup,
                                 void *data, uint16_t data_len) {
     (void)ctx;
-    (void)setup;
-    (void)data;
-    (void)data_len;
     if (g_active_ctrl == 0) {
         return -1;
     }
-    return uhci_control_transfer(g_active_ctrl, setup,
+    return xhci_control_transfer(g_active_ctrl, setup,
                                  (uint8_t)sizeof(usb_setup_t),
                                  data, data_len);
 }
 
 uint32_t usb_init(void) {
-    static uhci_controller_t controllers[2];
-    uint32_t n = uhci_pci_probe(controllers, 2);
+    static xhci_controller_t controllers[XHCI_MAX_CONTROLLERS];
+    uint32_t n = xhci_pci_probe(controllers, XHCI_MAX_CONTROLLERS);
     if (n == 0) {
         return 0;
     }
-    if (uhci_init(&controllers[0]) != 0) {
+    if (xhci_init(&controllers[0]) != 0) {
         return 0;
     }
     g_active_ctrl = &controllers[0];
-    usb_install_controller(uhci_xfer_trampoline, 0);
+    usb_install_controller(xhci_xfer_trampoline, 0);
     return 1;
 }
 
@@ -237,5 +358,12 @@ int usb_port_reset(uint8_t port_index) {
     if (g_active_ctrl == 0) {
         return 0;
     }
-    return uhci_port_reset(g_active_ctrl, port_index);
+    return xhci_port_reset(g_active_ctrl, port_index);
+}
+
+uint8_t usb_port_count(void) {
+    if (g_active_ctrl == 0) {
+        return 0;
+    }
+    return g_active_ctrl->max_ports;
 }

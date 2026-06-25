@@ -4,13 +4,33 @@
 
 #include "input/input.h"
 #include "usb/hid.h"
-#include "usb/uhci.h"
+#include "usb/xhci.h"
 
 uint8_t usb_hid_init(usb_hid_state_t *state, const usb_config_walk_t *walk) {
-    if (state == 0) {
+    if (state == 0 || walk == 0) {
         return 0;
     }
     state->count = 0;
+    return usb_hid_add_device(state, walk, 0);
+}
+
+static uint8_t boot_report_size(uint8_t protocol) {
+    if (protocol == 0x01U) {
+        return HID_BOOT_KEYBOARD_REPORT_SIZE;
+    }
+    if (protocol == 0x02U) {
+        return HID_BOOT_MOUSE_REPORT_SIZE;
+    }
+    return 0;
+}
+
+uint8_t usb_hid_add_device(usb_hid_state_t *state,
+                           const usb_config_walk_t *walk,
+                           const usb_device_t *usb_device) {
+    if (state == 0 || walk == 0) {
+        return 0;
+    }
+    uint8_t added = 0;
     for (uint8_t i = 0; i < walk->interface_count; i++) {
         const usb_interface_ref_t *iface = &walk->interfaces[i];
         if (iface->desc->bInterfaceClass != USB_CLASS_HID) {
@@ -21,7 +41,8 @@ uint8_t usb_hid_init(usb_hid_state_t *state, const usb_config_walk_t *walk) {
             /* Only boot-protocol keyboard (0x01) and mouse (0x02). */
             continue;
         }
-        const usb_endpoint_ref_t *ep = usb_find_endpoint_in(iface, 8U);
+        const usb_endpoint_ref_t *ep =
+            usb_find_endpoint_in(iface, boot_report_size(proto));
         if (ep == 0) {
             continue;
         }
@@ -30,15 +51,25 @@ uint8_t usb_hid_init(usb_hid_state_t *state, const usb_config_walk_t *walk) {
         }
         usb_hid_device_t *dev = &state->devices[state->count++];
         dev->device_address = 0;
+        if (usb_device != 0) {
+            dev->usb_device = *usb_device;
+            dev->device_address = usb_device->address;
+        } else {
+            dev->usb_device.xhci.ctrl = 0;
+            dev->usb_device.address = 0;
+        }
         dev->protocol = proto;
+        dev->interface_number = iface->desc->bInterfaceNumber;
         dev->endpoint_in = (uint8_t)(ep->address & 0x0FU);
+        dev->interval = ep->desc->bInterval;
         dev->max_packet = ep->max_packet;
         for (uint8_t k = 0; k < 6U; k++) {
             dev->prev_keys[k] = HID_KEY_NONE;
         }
         dev->prev_buttons = 0;
+        added++;
     }
-    return state->count;
+    return added;
 }
 
 uint8_t usb_hid_keyboard_report(usb_hid_device_t *dev,
@@ -142,18 +173,23 @@ int usb_hid_poll_device(usb_hid_device_t *dev) {
     if (dev->endpoint_in == 0) {
         return -1;
     }
-    /* Each device has its own controller handle. The kernel
-     * initializes `dev->ctrl` to the active controller from
-     * `usb_init`; here we just call the bus driver. */
-    extern uhci_controller_t *usb_active_controller(void);
-    uhci_controller_t *ctrl = usb_active_controller();
+    xhci_controller_t *ctrl = usb_active_controller();
     if (ctrl == 0) {
         return -1;
     }
     if (dev->protocol == 0x01U) {
         hid_boot_keyboard_report_t report;
-        int n = uhci_interrupt_in(ctrl, dev->endpoint_in, &report,
-                                  sizeof(report));
+        int n;
+        if (dev->usb_device.xhci.ctrl != 0) {
+            n = xhci_interrupt_in_device(&dev->usb_device.xhci,
+                                         dev->endpoint_in,
+                                         dev->max_packet, dev->interval,
+                                         &report, sizeof(report));
+        } else {
+            n = xhci_interrupt_in(ctrl, dev->endpoint_in,
+                                  dev->max_packet, dev->interval,
+                                  &report, sizeof(report));
+        }
         if (n <= 0) {
             return n;
         }
@@ -165,8 +201,17 @@ int usb_hid_poll_device(usb_hid_device_t *dev) {
         return (int)produced;
     } else if (dev->protocol == 0x02U) {
         hid_boot_mouse_report_t report;
-        int n = uhci_interrupt_in(ctrl, dev->endpoint_in, &report,
-                                  sizeof(report));
+        int n;
+        if (dev->usb_device.xhci.ctrl != 0) {
+            n = xhci_interrupt_in_device(&dev->usb_device.xhci,
+                                         dev->endpoint_in,
+                                         dev->max_packet, dev->interval,
+                                         &report, sizeof(report));
+        } else {
+            n = xhci_interrupt_in(ctrl, dev->endpoint_in,
+                                  dev->max_packet, dev->interval,
+                                  &report, sizeof(report));
+        }
         if (n <= 0) {
             return n;
         }
@@ -190,8 +235,12 @@ void usb_hid_state_reset(void) {
         }
         g_usb_hid_state.devices[i].prev_buttons = 0;
         g_usb_hid_state.devices[i].endpoint_in = 0;
+        g_usb_hid_state.devices[i].interface_number = 0;
+        g_usb_hid_state.devices[i].interval = 0;
         g_usb_hid_state.devices[i].device_address = 0;
         g_usb_hid_state.devices[i].protocol = 0;
+        g_usb_hid_state.devices[i].usb_device.xhci.ctrl = 0;
+        g_usb_hid_state.devices[i].usb_device.address = 0;
     }
 }
 
@@ -206,16 +255,18 @@ int usb_hid_poll_all(void) {
     return total;
 }
 
-int usb_hid_set_protocol_boot(uint8_t endpoint_in) {
+int usb_hid_set_protocol_boot(usb_hid_device_t *dev) {
+    if (dev == 0) {
+        return -1;
+    }
     usb_setup_t setup;
     setup.bmRequestType = 0x21U; /* Class, Interface, Host-to-device */
     setup.bRequest = USB_HID_SET_PROTOCOL;
     setup.wValue = USB_HID_BOOT_PROTOCOL;
-    setup.wIndex = endpoint_in;
+    setup.wIndex = dev->interface_number;
     setup.wLength = 0;
+    if (dev->usb_device.xhci.ctrl != 0) {
+        return usb_device_xfer(&dev->usb_device, &setup, 0, 0);
+    }
     return usb_installed_xfer(&setup, 0, 0);
 }
-
-/* Forward declaration for the xfer function (defined in usb_core.c). */
-extern int usb_installed_xfer(const usb_setup_t *setup, void *data,
-                             uint16_t data_len);

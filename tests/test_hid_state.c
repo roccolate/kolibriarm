@@ -23,10 +23,14 @@ void test_hid_state_reset_clears_count(void) {
 void test_hid_state_reset_clears_device_endpoints(void) {
     usb_hid_state_reset();
     g_usb_hid_state.devices[0].endpoint_in = 0x81U;
+    g_usb_hid_state.devices[0].interface_number = 3U;
+    g_usb_hid_state.devices[0].interval = 10U;
     g_usb_hid_state.devices[0].protocol = 0x01U;
     g_usb_hid_state.devices[0].prev_buttons = 0xFFU;
     usb_hid_state_reset();
     TEST_ASSERT_EQUAL_UINT64(0, g_usb_hid_state.devices[0].endpoint_in);
+    TEST_ASSERT_EQUAL_UINT64(0, g_usb_hid_state.devices[0].interface_number);
+    TEST_ASSERT_EQUAL_UINT64(0, g_usb_hid_state.devices[0].interval);
     TEST_ASSERT_EQUAL_UINT64(0, g_usb_hid_state.devices[0].protocol);
     TEST_ASSERT_EQUAL_UINT64(0, g_usb_hid_state.devices[0].prev_buttons);
 }
