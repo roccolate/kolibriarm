@@ -89,19 +89,24 @@ sticky-key wiring; `INPUT_KEY_LEFT/RIGHT` follow the same convention
 and the kernel already produces them through `ESC [ D`/`ESC [ C`
 (see `drivers/input/input.c`).
 
-### 3. Shell scrollback and prompt placement
+### 3. Shell scrollback and prompt placement — done
 
-The shell shows 8 fixed lines (`DISPLAY_LINES=8`) of 48 columns and a
-prompt at row 7. There is no scrollback: when the 8 lines are full, the
-oldest line is silently overwritten. Cursor placement on the prompt is
-implicit. Long-running commands have no visual feedback while they run.
+The shell now keeps a 256-entry circular log buffer (depth
+`LOG_DEPTH=256`) of `LINE_CAP`-byte lines, with a `scroll_offset`
+that the user moves via Page Up / Page Down. The prompt row sits
+at `28 + DISPLAY_LINES*16` regardless of `scroll_offset`, so it
+is always anchored to the bottom of the visible area. Any
+printable key, Enter, or Backspace resets `scroll_offset` to 0
+so the shell auto-follows new output as soon as the user touches
+the keyboard. The kernel input parser learned `ESC [ 5~` and
+`ESC [ 6~` (Page Up / Page Down) in the same commit — the new
+synthetic keys are `INPUT_KEY_PGUP` (0x105) and `INPUT_KEY_PGDN`
+(0x106).
 
-Implementation sketch:
-- Add a circular buffer of recent lines (depth ~256), drawn top-down with
-  a `scroll_offset` the user can change via PgUp/PgDn.
-- Render the prompt at the bottom of the visible area, not at a fixed row.
-- While a `run` is in flight, render a "running…" marker that updates when
-  the child exits.
+The "running…" marker that the ROADMAP mentions is intentionally
+deferred: it needs a `sys_proclist` poll on every redraw to
+notice the child exit, which doubles the syscall rate of an
+idle shell. The same plumbing will land as a follow-up.
 
 ### 4. Resize events — done
 
