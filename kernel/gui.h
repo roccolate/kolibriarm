@@ -33,6 +33,18 @@
 #define GUI_WINDOW_SKIP_TASKBAR (1U << 2)
 #define GUI_WINDOW_DOCK         (1U << 3)
 
+/* Cap on per-window cursor-shape regions. Each registered region is a
+ * (x, y, w, h, shape) tuple in the window's content-local coords; the
+ * kernel walks them in slot order on every cursor move and the first
+ * region that contains the cursor wins over the kernel's title-bar
+ * default. 8 covers a normal launcher/taskbar/widget surface without
+ * spilling. */
+#define GUI_MAX_CURSOR_REGIONS  8U
+/* Sentinel for SYS_CURSOR_REGISTER_REGION: passing shape ==
+ * GUI_CURSOR_REGION_DELETE clears the slot instead of installing a
+ * new region. */
+#define GUI_CURSOR_REGION_DELETE 0xffffffffU
+
 /* Bitmap returned by sys_window_state. The bit assignments are part
  * of the ABI; apps (and the panel) read them to check whether a
  * window is minimised or focused without polling the event queue. */
@@ -106,6 +118,20 @@ typedef struct {
      * leaving it stranded at the previous framebuffer position. */
     uint32_t *backing;
     uint32_t backing_capacity;
+    /* Per-window cursor-shape regions. Each slot is either inactive
+     * (used == 0) or describes a content-local rectangle that should
+     * show `shape` while the cursor is inside. The kernel walks the
+     * slots in ascending index order during gui_refresh_cursor_shape
+     * and uses the first region that contains the cursor; if none
+     * matches it falls back to the title-bar / arrow default. */
+    struct {
+        int32_t x;
+        int32_t y;
+        int32_t w;
+        int32_t h;
+        uint32_t shape;
+        uint8_t used;
+    } cursor_regions[GUI_MAX_CURSOR_REGIONS];
 } gui_window_t;
 
 typedef struct {
@@ -242,9 +268,25 @@ uint32_t gui_window_for_pid(gui_desktop_t *desktop, uint32_t owner_pid,
                             uint32_t index);
 int gui_hit_test(gui_desktop_t *desktop, int32_t x, int32_t y);
 int gui_window_contains(gui_window_t *window, int32_t x, int32_t y);
+/* Return a pointer to the window with the given id, or 0 if the slot
+ * is empty. Read-only by convention: callers that mutate window state
+ * must use the dedicated helpers (gui_move_window, gui_resize_window,
+ * ...) so the bookkeeping stays consistent. */
+const gui_window_t *gui_window_lookup(const gui_desktop_t *desktop,
+                                      uint32_t window_id);
 int gui_dispatch_input(gui_desktop_t *desktop, const input_event_t *event);
 void gui_get_cursor(gui_desktop_t *desktop, int32_t *x, int32_t *y);
 int gui_set_cursor_shape(gui_desktop_t *desktop, uint32_t shape);
+/* Install or clear a per-window cursor-shape region. The region is
+ * addressed by `slot` (0..GUI_MAX_CURSOR_REGIONS-1) and replaces any
+ * existing entry at that slot. Coords are content-local: the kernel
+ * adds the window's (x, y + title_h) when checking containment.
+ * Passing shape == GUI_CURSOR_REGION_DELETE clears the slot without
+ * installing a new region. Returns 0 on success, -1 if the window
+ * does not exist or slot is out of range. */
+int gui_register_cursor_region(gui_desktop_t *desktop, uint32_t window_id,
+                               uint32_t slot, int32_t x, int32_t y,
+                               uint32_t w, uint32_t h, uint32_t shape);
 void gui_set_cursor(gui_desktop_t *desktop, int32_t x, int32_t y);
 void gui_cursor_button(gui_desktop_t *desktop, uint32_t button,
                        uint32_t pressed);

@@ -161,6 +161,7 @@ Current limitations:
 | 83 | `sys_window_minimize` | `x0=window_id` | 0 / error | Owner-only: hide the window through the same path the kernel-drawn minimise button uses; pushes `GUI_EVENT_MINIMIZE` onto the owner's queue |
 | 84 | `sys_window_restore` | `x0=window_id` | 0 / error | Owner-only: inverse of `sys_window_minimize`; clears the hidden flag, raises the window, and pushes `GUI_EVENT_MAXIMIZE` |
 | 85 | `sys_window_state` | `x0=window_id, x1=out_ptr` | 0 / error | Owner-only: write a 32-bit state bitmap into the caller's buffer; bit 0 = minimised, bit 1 = currently focused |
+| 86 | `sys_cursor_register_region` | `x0=window_id, x1=slot, x2=x, x3=y, x4=w, x5=h, x6=shape` | 0 / error | Owner-only: install or replace a per-window cursor-shape region. Slot 0..7; the kernel walks the slots in ascending order during cursor refresh and the first region whose content-local rect contains the cursor wins over the kernel title-bar default. Pass `x6=0xffffffff` to clear the slot. |
 
 Current limitations:
 - These syscalls are the early desktop ABI, not a stable long-term ABI.
@@ -192,6 +193,14 @@ Current limitations:
   updates cursor shape itself over kernel title decorations; EL0-drawn
   controls such as panel launcher buttons can request `GUI_CURSOR_HAND`
   while hovered and `GUI_CURSOR_ARROW` when the hover leaves.
+- `sys_cursor_register_region` is the per-window refinement of
+  `sys_cursor_set_shape`. Apps register up to 8 content-local rectangles,
+  each tagged with a shape; the kernel walks the slots in ascending
+  index order during cursor refresh and uses the first region whose
+  rect contains the cursor. Coords are content-local: the kernel adds
+  the window's `(x, y + title_h)` when checking containment. A
+  non-owner pid returns `ERR_PERM`. The cap is 8 regions per window;
+  once a slot is full, the app must reuse a slot index.
 - Drawing writes through per-window backing buffers; the compositor walks
   the per-framebuffer damage list on each redraw and only repaints the
   rectangles the window funcs (or `sys_window_flush`) have queued. Owner

@@ -628,6 +628,264 @@ void test_gui_set_cursor_shape_rejects_unknown_shapes(void) {
                                                             GUI_CURSOR_ARROW));
 }
 
+void test_gui_cursor_register_region_installs_shape_inside_window(void) {
+    /*
+     * A registered HAND region inside the window's content area
+     * must flip the cursor shape even when no title bar is
+     * present. Without the per-region path, the kernel would fall
+     * through to the ARROW default for both positions.
+     */
+    uint32_t pixels[20000] = { 0 };
+    fb_t fb;
+    gui_desktop_t desktop;
+    uint32_t window_id;
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)fb_init(&fb, pixels, 200, 100, 200));
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_init(&desktop, &fb, 0xff101010U));
+    desktop.cursor.visible = 0;
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_create_window(
+                                 &desktop, 20, 10, 100, 60, 0xff0000aaU,
+                                 0xff808080U, &window_id));
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_register_cursor_region(
+                                 &desktop, window_id, 0U, 4, 4, 20, 20,
+                                 GUI_CURSOR_HAND));
+
+    gui_set_cursor(&desktop, 10, 20);
+    TEST_ASSERT_EQUAL_UINT64(GUI_CURSOR_ARROW,
+                             (uint64_t)desktop.cursor.shape);
+
+    gui_set_cursor(&desktop, 30, 20);
+    TEST_ASSERT_EQUAL_UINT64(GUI_CURSOR_HAND,
+                             (uint64_t)desktop.cursor.shape);
+
+    gui_set_cursor(&desktop, 25, 15);
+    TEST_ASSERT_EQUAL_UINT64(GUI_CURSOR_HAND,
+                             (uint64_t)desktop.cursor.shape);
+
+    gui_set_cursor(&desktop, 50, 30);
+    TEST_ASSERT_EQUAL_UINT64(GUI_CURSOR_ARROW,
+                             (uint64_t)desktop.cursor.shape);
+}
+
+void test_gui_cursor_register_region_overrides_title_bar_default(void) {
+    /*
+     * A title-bar hit normally switches to HAND. If a slot-0
+     * ARROW region covers that exact point, the region must win:
+     * the panel's launcher buttons live below the title bar but a
+     * docked app could legitimately want a region that overlaps
+     * the bar to override the implicit HAND.
+     */
+    uint32_t pixels[20000] = { 0 };
+    fb_t fb;
+    gui_desktop_t desktop;
+    uint32_t window_id;
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)fb_init(&fb, pixels, 200, 100, 200));
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_init(&desktop, &fb, 0xff101010U));
+    desktop.cursor.visible = 0;
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_create_window_for_pid(
+                                 &desktop, 9U, 20, 10, 100, 60, 0xff0000aaU,
+                                 0xff808080U, "titled", &window_id));
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_set_window_title_bar(
+                                 &desktop, window_id, 12U));
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_register_cursor_region(
+                                 &desktop, window_id, 0U, 0, -10, 100, 30,
+                                 GUI_CURSOR_ARROW));
+
+    gui_set_cursor(&desktop, 30, 15);
+    TEST_ASSERT_EQUAL_UINT64(GUI_CURSOR_ARROW,
+                             (uint64_t)desktop.cursor.shape);
+}
+
+void test_gui_cursor_register_region_first_matching_slot_wins(void) {
+    /*
+     * When two slots overlap, the lower slot index must win
+     * because the kernel walks in ascending order. This keeps
+     * "background" regions predictable: the app's coarse regions
+     * land in the early slots and fine-grained overrides land
+     * later without the order depending on registration time.
+     */
+    uint32_t pixels[20000] = { 0 };
+    fb_t fb;
+    gui_desktop_t desktop;
+    uint32_t window_id;
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)fb_init(&fb, pixels, 200, 100, 200));
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_init(&desktop, &fb, 0xff101010U));
+    desktop.cursor.visible = 0;
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_create_window(
+                                 &desktop, 20, 10, 100, 60, 0xff0000aaU,
+                                 0xff808080U, &window_id));
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_register_cursor_region(
+                                 &desktop, window_id, 0U, 0, 0, 100, 60,
+                                 GUI_CURSOR_HAND));
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_register_cursor_region(
+                                 &desktop, window_id, 1U, 0, 0, 100, 60,
+                                 GUI_CURSOR_ARROW));
+
+    gui_set_cursor(&desktop, 30, 30);
+    TEST_ASSERT_EQUAL_UINT64(GUI_CURSOR_HAND,
+                             (uint64_t)desktop.cursor.shape);
+}
+
+void test_gui_cursor_register_region_delete_clears_slot(void) {
+    /*
+     * Passing the DELETE sentinel must clear the slot without
+     * installing a replacement. A subsequent move over the same
+     * coords must fall through to the title-bar / ARROW default
+     * so the app can release its hover affordance without
+     * leaving a stale region behind.
+     */
+    uint32_t pixels[20000] = { 0 };
+    fb_t fb;
+    gui_desktop_t desktop;
+    uint32_t window_id;
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)fb_init(&fb, pixels, 200, 100, 200));
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_init(&desktop, &fb, 0xff101010U));
+    desktop.cursor.visible = 0;
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_create_window(
+                                 &desktop, 20, 10, 100, 60, 0xff0000aaU,
+                                 0xff808080U, &window_id));
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_register_cursor_region(
+                                 &desktop, window_id, 3U, 0, 0, 100, 60,
+                                 GUI_CURSOR_HAND));
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_register_cursor_region(
+                                 &desktop, window_id, 3U, 0, 0, 100, 60,
+                                 GUI_CURSOR_REGION_DELETE));
+
+    gui_set_cursor(&desktop, 30, 30);
+    TEST_ASSERT_EQUAL_UINT64(GUI_CURSOR_ARROW,
+                             (uint64_t)desktop.cursor.shape);
+}
+
+void test_gui_cursor_register_region_rejects_invalid_inputs(void) {
+    uint32_t pixels[20000] = { 0 };
+    fb_t fb;
+    gui_desktop_t desktop;
+    uint32_t window_id;
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)fb_init(&fb, pixels, 200, 100, 200));
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_init(&desktop, &fb, 0xff101010U));
+    desktop.cursor.visible = 0;
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_create_window(
+                                 &desktop, 20, 10, 100, 60, 0xff0000aaU,
+                                 0xff808080U, &window_id));
+
+    /* unknown shape */
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
+                             (uint64_t)gui_register_cursor_region(
+                                 &desktop, window_id, 0U, 0, 0, 10, 10, 99U));
+
+    /* out-of-range window */
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
+                             (uint64_t)gui_register_cursor_region(
+                                 &desktop, GUI_MAX_WINDOWS, 0U, 0, 0, 10, 10,
+                                 GUI_CURSOR_HAND));
+
+    /* out-of-range slot */
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
+                             (uint64_t)gui_register_cursor_region(
+                                 &desktop, window_id, GUI_MAX_CURSOR_REGIONS,
+                                 0, 0, 10, 10, GUI_CURSOR_HAND));
+
+    /* null desktop */
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
+                             (uint64_t)gui_register_cursor_region(
+                                 0, window_id, 0U, 0, 0, 10, 10,
+                                 GUI_CURSOR_HAND));
+
+    /* unknown window id (slot is empty) */
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
+                             (uint64_t)gui_register_cursor_region(
+                                 &desktop, 5U, 0U, 0, 0, 10, 10,
+                                 GUI_CURSOR_HAND));
+}
+
+void test_gui_cursor_register_region_clears_on_window_destroy(void) {
+    /*
+     * gui_destroy_window must wipe the cursor_regions array so a
+     * reused slot does not inherit leftover HAND shapes from the
+     * previous occupant. Without this, a fresh window that
+     * happens to land on the same pool index would show HAND
+     * everywhere before the new owner sets up its own regions.
+     */
+    uint32_t pixels[20000] = { 0 };
+    fb_t fb;
+    gui_desktop_t desktop;
+    uint32_t first;
+    uint32_t reused;
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)fb_init(&fb, pixels, 200, 100, 200));
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_init(&desktop, &fb, 0xff101010U));
+    desktop.cursor.visible = 0;
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_create_window(
+                                 &desktop, 20, 10, 100, 60, 0xff0000aaU,
+                                 0xff808080U, &first));
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_register_cursor_region(
+                                 &desktop, first, 0U, 0, 0, 100, 60,
+                                 GUI_CURSOR_HAND));
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_destroy_window(&desktop, first));
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)gui_create_window(
+                                 &desktop, 20, 10, 100, 60, 0xff00aa00U,
+                                 0xff404040U, &reused));
+    TEST_ASSERT_EQUAL_UINT64(first, reused);
+
+    gui_set_cursor(&desktop, 30, 30);
+    TEST_ASSERT_EQUAL_UINT64(GUI_CURSOR_ARROW,
+                             (uint64_t)desktop.cursor.shape);
+}
+
+void test_gui_cursor_register_region_constant_is_sane(void) {
+    /*
+     * Lock down the cap so a future change that bumps the
+     * constant (or accidentally drops it to 0) is caught here
+     * instead of in a runtime-only test.
+     */
+    TEST_ASSERT_TRUE(GUI_MAX_CURSOR_REGIONS >= 4U);
+    TEST_ASSERT_TRUE(GUI_MAX_CURSOR_REGIONS <= 16U);
+}
+
 void test_gui_set_title_bar_rejects_height_larger_than_window(void) {
     uint32_t pixels[16] = { 0 };
     fb_t fb;

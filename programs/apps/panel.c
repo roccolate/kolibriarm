@@ -309,13 +309,12 @@ static void on_move(panel_state_t *p, int32_t abs_x, int32_t abs_y) {
     int old_hover = p->hover;
     p->hover = new_hover;
 
-    // Update the global cursor shape so the kernel draws a hand
-    // when hovering a launcher button.
-    long shape = (long)GUI_CURSOR_ARROW;
-    if (new_hover >= 0 && new_hover < BTN_COUNT) {
-        shape = (long)GUI_CURSOR_HAND;
-    }
-    (void)gui_cursor_set_shape(shape);
+    // The kernel walks the per-window cursor-shape regions every
+    // refresh, so each launcher button slot has its own HAND region
+    // (registered once in main) and the shape flips automatically
+    // as the cursor crosses each boundary. No global cursor_set_shape
+    // side effect, no risk of leaking HAND into the desktop above
+    // the panel.
 
     // Repaint just the two affected buttons (old + new hover).
     if (old_hover >= 0 && old_hover < BTN_COUNT) {
@@ -440,6 +439,25 @@ int main(int argc, char **argv) {
         for (;;) {
             (void)kli_yield();
         }
+    }
+
+    /*
+     * Install one HAND-shape cursor region per launcher button so
+     * the kernel draws the hand cursor automatically as the mouse
+     * crosses each button boundary. Coords are content-local, which
+     * means (0, 0) is the top-left of the panel content area
+     * (i.e. just below the title bar, if any). Using per-window
+     * regions instead of the global SYS_CURSOR_SET_SHAPE means the
+     * panel cannot leak a HAND cursor into the desktop above the
+     * panel when the cursor leaves the launcher row.
+     */
+    for (int idx = 0; idx < BTN_COUNT; idx++) {
+        int bx = 4 + idx * (BTN_W + BTN_GAP);
+        int by = BTN_Y - PANEL_Y;
+        (void)gui_cursor_register_region(p.wid, (long)idx, (long)bx,
+                                          (long)by, (long)BTN_W,
+                                          (long)BTN_H,
+                                          (long)GUI_CURSOR_HAND);
     }
 
     long pid = kli_getpid();

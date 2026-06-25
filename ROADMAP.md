@@ -132,16 +132,21 @@ visible-side affordance is now complete: minimise a window via
 its title-bar button, the panel slot greys out, click the slot,
 the window reappears with the right z-order.
 
-### 6. Per-window cursor region registry
+### 6. Per-window cursor region registry — done
 
-`SYS_CURSOR_SET_SHAPE` (79) takes a global hint. The panel uses it for
-launcher-button hover, but apps that draw custom widgets have no way to
-register cursor shapes for individual regions of their window.
-
-Implementation sketch:
-- `sys_cursor_register_region(win, x, y, w, h, shape)` stores regions in
-  the window struct; `gui_dispatch_input` consults them during move
-  events and overrides the kernel default.
+`SYS_CURSOR_REGISTER_REGION` (86) installs up to 8 content-local
+`(x, y, w, h, shape)` regions per window. The kernel walks the slots
+in ascending order on every cursor refresh and uses the first region
+whose rect contains the cursor, which means a region can also
+*override* the implicit HAND on a title bar. Slots can be cleared
+with the `GUI_CURSOR_REGION_DELETE` (0xffffffff) sentinel. Ownership
+is enforced: non-owner pids get `ERR_PERM`. The panel replaces its
+old `SYS_CURSOR_SET_SHAPE` hover calls with one registration per
+launcher button, so the cursor cannot leak a HAND shape into the
+desktop above the panel when the cursor leaves the launcher row.
+`libkarmdesk/gui.h` adds `gui_cursor_register_region` and the host
+suite (`tests/test_gui.c`) covers install / override / first-slot
+priority / DELETE / invalid inputs / destroy-clear / constant sanity.
 
 ### 7. Interactive QEMU verification (no host test substitutes)
 

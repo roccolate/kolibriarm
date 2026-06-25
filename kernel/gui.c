@@ -241,6 +241,8 @@ static fb_t backing_fb_for(const gui_window_t *window) {
 static void gui_refresh_cursor_shape(gui_desktop_t *desktop) {
     int32_t hit;
     gui_window_t *window;
+    int32_t content_x;
+    int32_t content_y;
 
     if (desktop == 0) {
         return;
@@ -253,6 +255,32 @@ static void gui_refresh_cursor_shape(gui_desktop_t *desktop) {
     }
 
     window = &desktop->windows[hit];
+
+    /* Per-window cursor-shape regions win over the title-bar default.
+     * Walk the slots in ascending order; the first region whose
+     * content-local rect contains the cursor sets the shape. This
+     * lets apps override the cursor for clickable widgets drawn
+     * inside the window (launcher buttons, scroll bars, etc.) without
+     * touching the global SYS_CURSOR_SET_SHAPE. */
+    content_x = desktop->cursor.x - (int32_t)window->x;
+    content_y = desktop->cursor.y - ((int32_t)window->y +
+                                     (int32_t)window->title_h);
+    for (uint32_t i = 0; i < GUI_MAX_CURSOR_REGIONS; i++) {
+        if (window->cursor_regions[i].used == 0U) {
+            continue;
+        }
+        int32_t rx = window->cursor_regions[i].x;
+        int32_t ry = window->cursor_regions[i].y;
+        int32_t rw = window->cursor_regions[i].w;
+        int32_t rh = window->cursor_regions[i].h;
+        if (content_x >= rx && content_x < rx + rw &&
+            content_y >= ry && content_y < ry + rh) {
+            desktop->cursor.shape =
+                (uint8_t)window->cursor_regions[i].shape;
+            return;
+        }
+    }
+
     if (window->title_h > 0U && window->title[0] != '\0' &&
         desktop->cursor.y >= (int32_t)window->y &&
         desktop->cursor.y < (int32_t)(window->y + window->title_h)) {
@@ -282,6 +310,17 @@ int gui_window_contains(gui_window_t *window, int32_t x, int32_t y) {
            x < (int32_t)(window->x + window->w) &&
            y >= (int32_t)window->y &&
            y < (int32_t)(window->y + window->h);
+}
+
+const gui_window_t *gui_window_lookup(const gui_desktop_t *desktop,
+                                      uint32_t window_id) {
+    if (desktop == 0 || window_id >= GUI_MAX_WINDOWS) {
+        return 0;
+    }
+    if (desktop->windows[window_id].used == 0U) {
+        return 0;
+    }
+    return &desktop->windows[window_id];
 }
 
 int gui_hit_test(gui_desktop_t *desktop, int32_t x, int32_t y) {
@@ -324,6 +363,50 @@ int gui_set_cursor_shape(gui_desktop_t *desktop, uint32_t shape) {
     }
 
     desktop->cursor.shape = (uint8_t)shape;
+    return 0;
+}
+
+int gui_register_cursor_region(gui_desktop_t *desktop, uint32_t window_id,
+                               uint32_t slot, int32_t x, int32_t y,
+                               uint32_t w, uint32_t h, uint32_t shape) {
+    gui_window_t *window;
+
+    if (desktop == 0 || window_id >= GUI_MAX_WINDOWS ||
+        slot >= GUI_MAX_CURSOR_REGIONS) {
+        return -1;
+    }
+    window = &desktop->windows[window_id];
+    if (window->used == 0U) {
+        return -1;
+    }
+
+    if (shape == GUI_CURSOR_REGION_DELETE) {
+        window->cursor_regions[slot].used = 0U;
+        window->cursor_regions[slot].x = 0;
+        window->cursor_regions[slot].y = 0;
+        window->cursor_regions[slot].w = 0;
+        window->cursor_regions[slot].h = 0;
+        window->cursor_regions[slot].shape = 0;
+        if (window_id == desktop->focused_window_id) {
+            gui_refresh_cursor_shape(desktop);
+        }
+        return 0;
+    }
+
+    if (shape != GUI_CURSOR_ARROW && shape != GUI_CURSOR_HAND) {
+        return -1;
+    }
+
+    window->cursor_regions[slot].x = x;
+    window->cursor_regions[slot].y = y;
+    window->cursor_regions[slot].w = (int32_t)w;
+    window->cursor_regions[slot].h = (int32_t)h;
+    window->cursor_regions[slot].shape = shape;
+    window->cursor_regions[slot].used = 1U;
+
+    if (window_id == desktop->focused_window_id) {
+        gui_refresh_cursor_shape(desktop);
+    }
     return 0;
 }
 
@@ -622,6 +705,14 @@ int gui_create_window_for_pid(gui_desktop_t *desktop, uint32_t owner_pid,
         window->owner_drawn = 0;
         window->backing = 0;
         window->backing_capacity = 0;
+        for (uint32_t j = 0; j < GUI_MAX_CURSOR_REGIONS; j++) {
+            window->cursor_regions[j].x = 0;
+            window->cursor_regions[j].y = 0;
+            window->cursor_regions[j].w = 0;
+            window->cursor_regions[j].h = 0;
+            window->cursor_regions[j].shape = 0;
+            window->cursor_regions[j].used = 0;
+        }
         for (uint32_t j = 0; j < GUI_TITLE_LEN; j++) {
             window->title[j] = '\0';
         }
@@ -687,6 +778,14 @@ int gui_destroy_window(gui_desktop_t *desktop, uint32_t window_id) {
     window->event_count = 0;
     window->used = 0;
     window->owner_drawn = 0;
+    for (uint32_t j = 0; j < GUI_MAX_CURSOR_REGIONS; j++) {
+        window->cursor_regions[j].x = 0;
+        window->cursor_regions[j].y = 0;
+        window->cursor_regions[j].w = 0;
+        window->cursor_regions[j].h = 0;
+        window->cursor_regions[j].shape = 0;
+        window->cursor_regions[j].used = 0;
+    }
     for (uint32_t j = 0; j < GUI_TITLE_LEN; j++) {
         window->title[j] = '\0';
     }

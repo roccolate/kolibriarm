@@ -28,6 +28,7 @@
 #define ERR_BADF  (-5LL)
 #define ERR_INVAL (-7LL)
 #define ERR_AGAIN (-11LL)
+#define ERR_PERM  (-13LL)
 
 #define SPSR_EL1H_MASKED 0x3c5ULL
 
@@ -649,6 +650,38 @@ static int64_t sys_cursor_set_shape(process_t *process, uint64_t shape) {
     return 0;
 }
 
+static int64_t sys_cursor_register_region(process_t *process, uint64_t win,
+                                          uint64_t slot, uint64_t x,
+                                          uint64_t y, uint64_t w, uint64_t h,
+                                          uint64_t shape) {
+    if (process == 0 || win > UINT32_MAX || slot > UINT32_MAX ||
+        x > INT32_MAX || y > INT32_MAX || w > UINT32_MAX ||
+        h > UINT32_MAX || shape > UINT32_MAX) {
+        return ERR_INVAL;
+    }
+    /* Only the owning process may register cursor regions on its
+     * windows. Without this guard any pid could swap the cursor to
+     * a hand shape over a victim's content, which would silently
+     * break clickable widgets the user expects to be safe. */
+    const gui_window_t *window =
+        gui_window_lookup(gui_desktop(), (uint32_t)win);
+    if (window == 0 || window->used == 0U) {
+        return ERR_NOENT;
+    }
+    if (window->owner_pid != GUI_NO_OWNER &&
+        window->owner_pid != (uint32_t)process->pid) {
+        return ERR_PERM;
+    }
+    if (gui_register_cursor_region(gui_desktop(), (uint32_t)win,
+                                   (uint32_t)slot, (int32_t)x, (int32_t)y,
+                                   (uint32_t)w, (uint32_t)h,
+                                   (uint32_t)shape) != 0) {
+        return ERR_INVAL;
+    }
+    gui_request_redraw();
+    return 0;
+}
+
 /*
  * sys_window_flush: push a content-local damage rectangle for the given
  * window. The compositor converts it to framebuffer coordinates and
@@ -1101,6 +1134,11 @@ void syscall_dispatch(exception_frame_t *frame) {
     case SYS_WINDOW_STATE:
         frame->x[0] = (uint64_t)sys_window_state(current, frame->x[0],
                                                   frame->x[1]);
+        break;
+    case SYS_CURSOR_REGISTER_REGION:
+        frame->x[0] = (uint64_t)sys_cursor_register_region(
+            current, frame->x[0], frame->x[1], frame->x[2], frame->x[3],
+            frame->x[4], frame->x[5], frame->x[6]);
         break;
     case SYS_TIMEINFO:
         frame->x[0] = (uint64_t)sys_timeinfo(frame->x[0]);

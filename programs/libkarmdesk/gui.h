@@ -187,4 +187,29 @@ static inline long gui_window_state(long window_id, uint32_t *out_ptr) {
     return __syscall2(SYS_WINDOW_STATE, window_id, (long)(uintptr_t)out_ptr);
 }
 
+// gui_cursor_register_region: owner-only; install or replace a
+// per-window cursor-shape region. slot is 0..7; x, y, w, h are
+// content-local. Pass shape == 0xffffffff to clear the slot. The
+// kernel walks the slots in ascending order during cursor refresh
+// and uses the first region whose rect contains the cursor, so
+// later slots in the list have lower priority.
+static inline long gui_cursor_register_region(long window_id, long slot,
+                                              long x, long y, long w,
+                                              long h, long shape) {
+    register long x0 __asm__("x0") = window_id;
+    register long x1 __asm__("x1") = slot;
+    register long x2 __asm__("x2") = x;
+    register long x3 __asm__("x3") = y;
+    register long x4 __asm__("x4") = w;
+    register long x5 __asm__("x5") = h;
+    register long x6 __asm__("x6") = shape;
+    register long x8 __asm__("x8") = SYS_CURSOR_REGISTER_REGION;
+    __asm__ volatile("svc #0"
+                     : "+r"(x0)
+                     : "r"(x1), "r"(x2), "r"(x3),
+                       "r"(x4), "r"(x5), "r"(x6), "r"(x8)
+                     : "memory", "cc");
+    return x0;
+}
+
 #endif
