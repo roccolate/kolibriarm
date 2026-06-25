@@ -7,7 +7,7 @@
 // file last in the link line) keeps the marker out of clock.c's
 // inline-asm hacks.
 
-.section .user.image.text, "ax"
+.section .user.image.end, "ax"
 
 .global clock_image_end
 clock_image_end:

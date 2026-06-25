@@ -41,11 +41,16 @@
 #define EVENT_CAP        8
 #define PROC_CAP         4
 #define ARGV_MAX         8
-#define HISTORY_DEPTH    8
+#define HISTORY_DEPTH    4
 /* Circular log buffer depth. Each entry is a fixed LINE_CAP-byte
- * cstring; 256 is enough for several screens of output without
- * silently dropping history on a busy session. */
-#define LOG_DEPTH      256
+ * cstring. LOG_DEPTH controls how far the user can scroll back from
+ * the latest output via Page Up. The shell_state_t struct lives on
+ * the C stack (the loader only copies KLI1 image bytes, BSS is
+ * unmapped), so LOG_DEPTH * LINE_CAP must stay under a kilobyte or
+ * two of the 4 KB kernel stack. 16 entries = 1 KB of log, plus
+ * history (256 B), procs and argv (~1 KB), still leaves room for
+ * the rest of the struct and the live call stack. */
+#define LOG_DEPTH       16
 
 #define COLOR_BG         0xff141820U
 #define COLOR_BORDER     0xff708870U
@@ -446,7 +451,15 @@ int main(int argc, char **argv) {
     (void)argc;
     (void)argv;
 
-    static shell_state_t s;
+    /*
+     * shell_state_t is ~1.7 KB and lives on the C stack instead of
+     * BSS. The loader only copies the KLI1 image bytes (header +
+     * code + rodata) into the per-process image slot, so a static
+     * shell_state_t would land in unmapped memory and the first
+     * write would fault with a translation abort. Same constraint
+     * that drives panel.c to put panel_state_t on the stack.
+     */
+    shell_state_t s;
     s.line_len = 0;
     s.history_count = 0;
     s.history_cursor = 0;

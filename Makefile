@@ -236,6 +236,7 @@ $(BUILD_DIR)/$(APPS_DIR)/panel.elf: $(BUILD_DIR)/$(APPS_DIR)/panel.o \
     $(BUILD_DIR)/$(APPS_DIR)/panel_header.o \
     $(BUILD_DIR)/$(LIBKARM_DIR)/syscall.o \
     $(BUILD_DIR)/$(LIBKARM_DIR)/crt0.o \
+    $(BUILD_DIR)/$(LIBKARM_DIR)/string.o \
     $(BUILD_DIR)/$(APPS_DIR)/panel_end.o \
     $(APPS_DIR)/image.ld
 	$(LD) -T $(APPS_DIR)/image.ld -nostdlib \
@@ -243,6 +244,7 @@ $(BUILD_DIR)/$(APPS_DIR)/panel.elf: $(BUILD_DIR)/$(APPS_DIR)/panel.o \
 	    $(BUILD_DIR)/$(APPS_DIR)/panel_header.o \
 	    $(BUILD_DIR)/$(LIBKARM_DIR)/syscall.o \
 	    $(BUILD_DIR)/$(LIBKARM_DIR)/crt0.o \
+	    $(BUILD_DIR)/$(LIBKARM_DIR)/string.o \
 	    $(BUILD_DIR)/$(APPS_DIR)/panel_end.o \
 	    -o $@
 

@@ -25,6 +25,7 @@
 #include <stdint.h>
 
 #include "libkarm/syscall.h"
+#include "libkarm/string.h"
 #include "libkarm/errno.h"
 #include "libkarmdesk/gui.h"
 
@@ -252,6 +253,19 @@ static void launch_button(panel_state_t *p, int idx) {
         return;
     }
 
+    /*
+     * Refuse to launch another panel from the panel. Each spawned
+     * panel has the same launcher buttons, so without this guard a
+     * single click cascades into N nested panels until the process
+     * table fills and every visible click starts returning -1.
+     * The "panel" button is kept as a slot so the launcher row
+     * layout stays fixed, but its click is just a no-op.
+     */
+    if (strcmp(p->button_labels[idx], "panel") == 0) {
+        write_cstr(1, "panel: already running (no nested panels)\n");
+        return;
+    }
+
     write_cstr(1, "panel: launch ");
     write_cstr(1, p->button_labels[idx]);
     write_cstr(1, "\n");
@@ -466,6 +480,26 @@ int main(int argc, char **argv) {
     redraw_all(&p);
     refresh_running(&p);
     write_cstr(1, "panel: ready\n");
+
+#ifdef PANEL_AUTO_TEST
+    /*
+     * Smoke test: launch every non-panel button once at boot so the
+     * UART log shows whether each app survives main(), creates its
+     * window, and stays alive. Disabled by default; enable by
+     * passing -DPANEL_AUTO_TEST to the compiler.
+     */
+    write_cstr(1, "panel: auto-test launch every button\n");
+    for (int idx = 0; idx < BTN_COUNT; idx++) {
+        if (strcmp(p.button_labels[idx], "panel") == 0) {
+            continue;
+        }
+        write_cstr(1, "panel: auto-test click ");
+        write_cstr(1, p.button_labels[idx]);
+        write_cstr(1, "\n");
+        launch_button(&p, idx);
+        (void)kli_yield();
+    }
+#endif
 
     for (;;) {
         long n = gui_window_event(p.wid, p.events, EVENT_CAP);

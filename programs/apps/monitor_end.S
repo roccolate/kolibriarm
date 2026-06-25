@@ -5,7 +5,7 @@
 // monitor_image_header's image_size field correctly reports how many
 // bytes the loader should copy into per-process memory.
 
-.section .user.image.text, "ax"
+.section .user.image.end, "ax"
 
 .global monitor_image_end
 monitor_image_end:
