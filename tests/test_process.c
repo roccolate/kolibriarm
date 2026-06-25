@@ -538,3 +538,39 @@ void test_process_release_releases_resources(void) {
         pmm_free_page(p);
     }
 }
+
+void test_process_mark_exited_is_idempotent_in_state(void) {
+    /*
+     * Lock down the centralised cleanup invariant:
+     * process_mark_exited is the single point that flips state to
+     * ZOMBIE, and only the first call must trigger the GUI-window
+     * destroy (a duplicate call must not crash, and the second
+     * call is a no-op state-wise). Without this guard a re-marked
+     * process would try to destroy windows that have already been
+     * destroyed by process_release.
+     *
+     * We can't drive gui_destroy_windows_for_pid from here without
+     * a real fb_t and gui_init, so we only assert the state
+     * transition and the fact that the second call does not flip
+     * exit_code back to ZOMBIE-without-an-update.
+     */
+    process_t process;
+    process_table_init();
+    process_init(&process, 13, "idempotent-exit");
+    TEST_ASSERT_EQUAL_UINT64(PROCESS_READY, process.state);
+
+    process_mark_exited(&process, 0x55);
+    TEST_ASSERT_EQUAL_UINT64(PROCESS_ZOMBIE, process.state);
+    TEST_ASSERT_EQUAL_UINT64(0x55, process.exit_code);
+
+    /* Second call must not overwrite exit_code or change state.
+     * If the implementation did a full re-mark including GUI work
+     * here, it could touch freed memory in a future caller that
+     * raced with reclaim; the early-out on state==ZOMBIE prevents
+     * that. */
+    process_mark_exited(&process, 0x99);
+    TEST_ASSERT_EQUAL_UINT64(PROCESS_ZOMBIE, process.state);
+    TEST_ASSERT_EQUAL_UINT64(0x55, process.exit_code);
+
+    process_release(&process);
+}

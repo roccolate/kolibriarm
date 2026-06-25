@@ -231,7 +231,9 @@ int process_wait_zombie(uint32_t pid, uint64_t *exit_code) {
     }
 
     *exit_code = process->exit_code;
-    gui_destroy_windows_for_pid(gui_desktop(), pid);
+    /* GUI windows were destroyed by process_mark_exited when the
+     * process became zombie; process_release here only frees the
+     * page table and mmap pages. */
     process_release(process);
     return 0;
 }
@@ -252,18 +254,11 @@ void process_reclaim_zombies(void) {
     for (uint32_t i = 0; i < PROCESS_MAX_PROCESSES; i++) {
         if (g_processes[i].state == PROCESS_ZOMBIE) {
             /*
-             * Destroy any windows the dying process owned before
-             * freeing its slot. Without this the desktop would
-             * accumulate ghost windows between spawns (a fresh
-             * spawn hits process_reclaim_zombies, but the previous
-             * owner's window would only be freed when the user
-             * happened to click its (also-orphaned) close button).
-             * gui_destroy_windows_for_pid is a no-op if the
-             * process owned no windows (the panel, the click-only
-             * path) so it is always safe.
+             * Note: GUI windows were destroyed by
+             * process_mark_exited when the process first became a
+             * zombie. process_release here only needs to free
+             * the page table and mmap pages.
              */
-            gui_destroy_windows_for_pid(gui_desktop(),
-                                        g_processes[i].pid);
             process_release(&g_processes[i]);
         }
     }
@@ -345,6 +340,26 @@ void process_mark_exited(process_t *process, uint64_t exit_code) {
     if (process == 0) {
         return;
     }
+
+    /*
+     * Centralised cleanup: every path that marks a process as a
+     * zombie (handle_user_fault, sys_exit, process_kill) lands
+     * here, and only here. Destroying the owned GUI windows at
+     * this point keeps the desktop from accumulating ghost
+     * windows the user cannot reach (the close-button path only
+     * fires for live owners). The window destroy is a no-op for
+     * processes that never opened a window (kernel threads,
+     * short-lived helpers) so it is safe to do unconditionally.
+     *
+     * Both the window destroy and the exit_code write are gated
+     * on `state != PROCESS_ZOMBIE` so a second call (e.g. a kill
+     * followed by an unrelated sys_exit from another pid that
+     * races) is a clean no-op and does not touch freed memory.
+     */
+    if (process->state == PROCESS_ZOMBIE) {
+        return;
+    }
+    gui_destroy_windows_for_pid(gui_desktop(), process->pid);
 
     process->exit_code = exit_code;
     process->state = PROCESS_ZOMBIE;

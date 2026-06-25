@@ -93,14 +93,10 @@ static void handle_user_fault(exception_frame_t *frame, uint64_t esr,
     uart_puts("\n");
 
     /*
-     * Destroy any windows the faulting process owned. Without
-     * this, a process that crashes leaves its window behind until
-     * the user clicks close (which only fires for live owners);
-     * the GUI_MAX_WINDOWS pool would fill up with ghosts the user
-     * cannot reach. process_reclaim_zombies will free the slot on
-     * the next spawn; we only need to drop the windows here.
+     * Note: the process's GUI windows are destroyed by
+     * process_mark_exited above (centralised cleanup), so we do
+     * not need to call gui_destroy_windows_for_pid here.
      */
-    gui_destroy_windows_for_pid(gui_desktop(), current->pid);
 
     next = process_next_runnable(current);
     if (next != 0) {

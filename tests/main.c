@@ -25,6 +25,7 @@ void test_process_next_runnable_round_robin_and_reclaim_zombies(void);
 void test_process_free_resources_releases_owned_pages(void);
 void test_process_free_resources_is_idempotent(void);
 void test_process_release_releases_resources(void);
+void test_process_mark_exited_is_idempotent_in_state(void);
 void test_gui_destroy_windows_for_pid_destroys_owner_windows(void);
 void test_gui_destroy_windows_for_pid_is_safe_on_no_match(void);
 void test_gui_destroy_windows_for_pid_handles_null_and_no_owner_sentinel(void);
@@ -305,6 +306,7 @@ int main(void) {
     RUN_TEST(test_process_free_resources_releases_owned_pages);
     RUN_TEST(test_process_free_resources_is_idempotent);
     RUN_TEST(test_process_release_releases_resources);
+    RUN_TEST(test_process_mark_exited_is_idempotent_in_state);
     RUN_TEST(test_gui_destroy_windows_for_pid_destroys_owner_windows);
     RUN_TEST(test_gui_destroy_windows_for_pid_is_safe_on_no_match);
     RUN_TEST(test_gui_destroy_windows_for_pid_handles_null_and_no_owner_sentinel);
