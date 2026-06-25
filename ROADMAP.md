@@ -232,12 +232,22 @@ The qemu-virt desktop ships first; the RPi port waits until the kernel
 contract is stable enough that bringing it up does not require touching
 the core.
 
-### 10. Resilience: what happens when the panel crashes
+### 10. Resilience: what happens when the panel crashes — done
 
-The panel is a regular EL0 process. If it faults, the desktop has no
-taskbar, no launcher, and no way to raise running apps. There is no
-restart policy. The minimal fix is to detect the panel's exit from the
-kernel and relaunch it from `bootfs`.
+`panel_boot_run_with_recovery` (in `kernel/panel_boot_recovery.c`) wraps
+`panel_boot_run` and relaunches the panel up to
+`PANEL_BOOT_RECOVERY_MAX_ATTEMPTS` (3) times after it exits, whether
+the exit was a clean `sys_exit` or a fault that funnelled through the
+same return trampoline. `kernel.c` calls the recovery variant from
+`run_panel_boot_smoke`; on the final failed attempt the wrapper logs
+"panel_boot: giving up after N attempts" before returning so the
+desktop is not silent. The policy decision is in the pure helper
+`panel_boot_recovery_decide`, which is covered by
+`tests/test_panel_boot_recovery.c` (constant sanity, every branch of
+the policy, plus integration tests that verify the wrapper invokes
+`panel_boot_run` exactly `MAX_ATTEMPTS` times and propagates the
+final exit code). A clean shutdown syscall would slot in here as an
+extra branch in `decide`.
 
 ### 11. Engine and multimedia runtime (deferred)
 

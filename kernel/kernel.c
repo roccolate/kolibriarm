@@ -20,6 +20,7 @@
 #include "kernel/timer/timer.h"
 #include "kernel/tmpfs.h"
 #include "kernel/panel_boot.h"
+#include "kernel/panel_boot_recovery.h"
 #include "kernel/vfs.h"
 #include "uart/pl011.h"
 #include "input/input.h"
@@ -134,8 +135,8 @@ static void init_vfs(void) {
 }
 
 static void run_panel_boot_smoke(const dtb_memory_t *memory) {
-    uint64_t user_exit_code = panel_boot_run(memory->base, memory->size,
-                                            board_map_mmio);
+    uint64_t user_exit_code = panel_boot_run_with_recovery(
+        memory->base, memory->size, board_map_mmio);
 
     uart_puts("USER demo exit code: ");
     print_hex64(user_exit_code);
