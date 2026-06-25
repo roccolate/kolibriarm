@@ -21,7 +21,7 @@
 #define WIN_Y         120
 #define WIN_W         340
 #define WIN_H         220
-#define TITLE_BAR_H    12
+#define TITLE_BAR_H    16
 #define EVENT_CAP       8
 #define PROC_CAP        6
 #define REDRAW_WAIT    20

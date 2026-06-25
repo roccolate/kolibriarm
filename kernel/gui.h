@@ -19,7 +19,7 @@
 /* Kernel-drawn close button inside the title bar. The box is only
  * rendered (and only intercepts clicks) when the window has a
  * title_h large enough to fit it without crowding the title text. */
-#define GUI_CLOSE_BTN_W      10U
+#define GUI_CLOSE_BTN_W      14U
 #define GUI_CLOSE_BTN_PAD     2U
 #define GUI_CLOSE_BTN_MIN_TITLE_H 10U
 /* Default kernel-drawn title bar height when an app requests one. Fits

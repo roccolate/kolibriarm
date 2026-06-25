@@ -34,7 +34,7 @@
 #define WIN_Y           52
 #define WIN_W          480
 #define WIN_H          280
-#define TITLE_BAR_H     12
+#define TITLE_BAR_H     16
 #define LINE_CAP        64
 #define DISPLAY_LINES    7
 #define DISPLAY_COLS    48

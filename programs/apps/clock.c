@@ -22,7 +22,7 @@
 
 #define WIN_W            200
 #define WIN_H             80
-#define TITLE_BAR_H       12
+#define TITLE_BAR_H       16
 #define EVENT_CAP          4
 #define YIELDS_PER_SEC   200
 

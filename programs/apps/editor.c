@@ -24,7 +24,7 @@
 #define WIN_Y          72
 #define WIN_W         420
 #define WIN_H         260
-#define TITLE_BAR_H    12
+#define TITLE_BAR_H    16
 #define FILE_CAP      512
 #define RENDER_COLS   128
 #define EVENT_CAP       8
