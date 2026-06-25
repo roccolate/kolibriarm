@@ -56,6 +56,13 @@ _Static_assert(sizeof(gui_event_t) == 12,
 #define GUI_EVENT_MOUSE_MOVE  4U
 #define GUI_EVENT_RESIZE       5U
 #define GUI_EVENT_CLOSE        6U
+#define GUI_EVENT_MINIMIZE     7U
+#define GUI_EVENT_MAXIMIZE     8U
+
+// Window state bits returned by gui_window_state. Bit assignments
+// match GUI_WINDOW_STATE_* in kernel/gui.h.
+#define GUI_WINDOW_STATE_MINIMIZED 0x1U
+#define GUI_WINDOW_STATE_FOCUSED   0x2U
 
 // cursor shape ids for gui_cursor_set_shape.
 #define GUI_CURSOR_ARROW 0U
@@ -157,6 +164,27 @@ static inline long gui_window_get_bounds(long window_id, void *out_ptr) {
 static inline long gui_window_set_bounds(long window_id, long x, long y,
                                          long w, long h) {
     return __syscall6(SYS_WINDOW_SET_BOUNDS, window_id, x, y, w, h, 0);
+}
+
+// gui_window_minimize: owner-only; hides the window through the same
+// path the kernel-drawn minimise button uses. The kernel pushes
+// GUI_EVENT_MINIMIZE on the owner's event queue.
+static inline long gui_window_minimize(long window_id) {
+    return __syscall1(SYS_WINDOW_MINIMIZE, window_id);
+}
+
+// gui_window_restore: owner-only; inverse of gui_window_minimize.
+// Clears the hidden flag, raises the window, and pushes
+// GUI_EVENT_MAXIMIZE so apps that resize on maximise can rebuild.
+static inline long gui_window_restore(long window_id) {
+    return __syscall1(SYS_WINDOW_RESTORE, window_id);
+}
+
+// gui_window_state: owner-only; writes a 32-bit state bitmap into
+// out_ptr. Bit 0 = GUI_WINDOW_STATE_MINIMIZED, bit 1 =
+// GUI_WINDOW_STATE_FOCUSED.
+static inline long gui_window_state(long window_id, uint32_t *out_ptr) {
+    return __syscall2(SYS_WINDOW_STATE, window_id, (long)(uintptr_t)out_ptr);
 }
 
 #endif
