@@ -5,7 +5,7 @@
 #include "kernel/boot_program.h"
 #include "kernel/vfs.h"
 
-#define BOOTFS_MAX_NODES 16U
+#define BOOTFS_MAX_NODES 5U
 
 static bootfs_file_t g_found_file;
 static vfs_node_t g_bootfs_vfs_nodes[BOOTFS_MAX_NODES];

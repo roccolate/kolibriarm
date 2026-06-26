@@ -606,10 +606,16 @@ static int64_t sys_window_redraw(process_t *process, uint64_t window_id) {
 }
 
 static int64_t sys_window_focus(process_t *process, uint64_t window_id) {
+    gui_desktop_t *desktop = gui_desktop();
+    gui_window_t *window;
+
     if (process == 0 || window_id >= GUI_MAX_WINDOWS) {
         return ERR_INVAL;
     }
-    gui_window_t *window = &gui_desktop()->windows[window_id];
+    if (desktop == 0) {
+        return ERR_AGAIN;
+    }
+    window = &desktop->windows[window_id];
     if (window->used == 0) {
         return ERR_NOENT;
     }
@@ -617,7 +623,7 @@ static int64_t sys_window_focus(process_t *process, uint64_t window_id) {
      * deliberately callable by any process. The desktop taskbar (a
      * different pid from the app owners) needs to raise windows it did
      * not create when the user clicks a running-app entry. */
-    if (gui_focus_window(gui_desktop(), (uint32_t)window_id) != 0) {
+    if (gui_focus_window(desktop, (uint32_t)window_id) != 0) {
         return ERR_INVAL;
     }
     gui_request_redraw();
@@ -626,12 +632,17 @@ static int64_t sys_window_focus(process_t *process, uint64_t window_id) {
 
 static int64_t sys_window_for_pid(process_t *process, uint64_t owner_pid,
                                   uint64_t index) {
+    gui_desktop_t *desktop = gui_desktop();
+    uint32_t window_id;
+
     if (process == 0 || owner_pid > UINT32_MAX || index > GUI_MAX_WINDOWS) {
         return ERR_INVAL;
     }
-    uint32_t window_id = gui_window_for_pid(gui_desktop(),
-                                            (uint32_t)owner_pid,
-                                            (uint32_t)index);
+    if (desktop == 0) {
+        return ERR_AGAIN;
+    }
+    window_id = gui_window_for_pid(desktop, (uint32_t)owner_pid,
+                                   (uint32_t)index);
     if (window_id == GUI_NO_WINDOW) {
         return ERR_NOENT;
     }
@@ -639,10 +650,15 @@ static int64_t sys_window_for_pid(process_t *process, uint64_t owner_pid,
 }
 
 static int64_t sys_cursor_set_shape(process_t *process, uint64_t shape) {
+    gui_desktop_t *desktop = gui_desktop();
+
     if (process == 0 || shape > UINT32_MAX) {
         return ERR_INVAL;
     }
-    if (gui_set_cursor_shape(gui_desktop(), (uint32_t)shape) != 0) {
+    if (desktop == 0) {
+        return ERR_AGAIN;
+    }
+    if (gui_set_cursor_shape(desktop, (uint32_t)shape) != 0) {
         return ERR_INVAL;
     }
     gui_request_redraw();
@@ -653,17 +669,22 @@ static int64_t sys_cursor_register_region(process_t *process, uint64_t win,
                                           uint64_t slot, uint64_t x,
                                           uint64_t y, uint64_t w, uint64_t h,
                                           uint64_t shape) {
+    gui_desktop_t *desktop = gui_desktop();
+    const gui_window_t *window;
+
     if (process == 0 || win > UINT32_MAX || slot > UINT32_MAX ||
         x > INT32_MAX || y > INT32_MAX || w > UINT32_MAX ||
         h > UINT32_MAX || shape > UINT32_MAX) {
         return ERR_INVAL;
     }
+    if (desktop == 0) {
+        return ERR_AGAIN;
+    }
     /* Only the owning process may register cursor regions on its
      * windows. Without this guard any pid could swap the cursor to
      * a hand shape over a victim's content, which would silently
      * break clickable widgets the user expects to be safe. */
-    const gui_window_t *window =
-        gui_window_lookup(gui_desktop(), (uint32_t)win);
+    window = gui_window_lookup(desktop, (uint32_t)win);
     if (window == 0 || window->used == 0U) {
         return ERR_NOENT;
     }
@@ -671,7 +692,7 @@ static int64_t sys_cursor_register_region(process_t *process, uint64_t win,
         window->owner_pid != (uint32_t)process->pid) {
         return ERR_PERM;
     }
-    if (gui_register_cursor_region(gui_desktop(), (uint32_t)win,
+    if (gui_register_cursor_region(desktop, (uint32_t)win,
                                    (uint32_t)slot, (int32_t)x, (int32_t)y,
                                    (uint32_t)w, (uint32_t)h,
                                    (uint32_t)shape) != 0) {

@@ -76,27 +76,6 @@ static void init_memory_manager(const dtb_memory_t *memory, uint64_t dtb_addr) {
     pmm_reserve_range(dtb_addr, dtb_total_size(dtb_addr));
 }
 
-static void run_pmm_smoke(void) {
-    uint64_t page_a = pmm_alloc_page();
-    uint64_t page_b = pmm_alloc_page();
-
-    pmm_free_page(page_a);
-    pmm_free_page(page_b);
-}
-
-static void run_kheap_smoke(void) {
-    kheap_init();
-
-    void *heap_a = kmalloc(64);
-    void *heap_b = kmalloc(128);
-
-    kfree(heap_a);
-    void *heap_c = kmalloc(32);
-
-    kfree(heap_b);
-    kfree(heap_c);
-}
-
 static init_status_t init_vfs(void) {
     static const uint8_t note[] = "KolibriARM tmpfs\n";
     uint8_t magic[4];
@@ -172,7 +151,7 @@ static void panel_boot_log_line(const char *line) {
     uart_puts(line);
 }
 
-static init_status_t run_panel_boot_smoke(const dtb_memory_t *memory) {
+static init_status_t start_panel_boot(const dtb_memory_t *memory) {
     panel_boot_context_t boot = {
         .memory_base = memory->base,
         .memory_size = memory->size,
@@ -181,7 +160,7 @@ static init_status_t run_panel_boot_smoke(const dtb_memory_t *memory) {
     uint64_t user_exit_code = panel_boot_recovery_run(
         run_panel_boot_once, &boot, panel_boot_log_line);
 
-    uart_puts("USER demo exit code: ");
+    uart_puts("USER exit code: ");
     print_hex64(user_exit_code);
     uart_puts("\n");
 
@@ -216,14 +195,14 @@ static int probe_fat32(void) {
         uart_puts("FAT32 root: absent\n");
     }
 
-    if (fat32_mount_vfs_file(&g_fat32_fs, "/fat/user_demo.bin",
-                             "USERDEMO.BIN") != 0 ||
-        vfs_stat("/fat/user_demo.bin", &stat) != 0) {
-        uart_puts("FAT32 file: absent\n");
+    if (fat32_mount_vfs_file(&g_fat32_fs, "/fat/shell.bin",
+                             "SHELL.BIN") != 0 ||
+        vfs_stat("/fat/shell.bin", &stat) != 0) {
+        uart_puts("FAT32 shell: absent\n");
         return -1;
     }
 
-    uart_puts("FAT32 file bytes: ");
+    uart_puts("FAT32 shell bytes: ");
     print_hex64(stat.size);
     uart_puts("\n");
 
@@ -342,7 +321,7 @@ static int enable_identity_mmu(const dtb_memory_t *memory, uint64_t dtb_addr) {
     }
 
     if (vmm_ok != 0) {
-        uart_puts("VMM smoke: failed\n");
+        uart_puts("VMM map: failed\n");
         return -1;
     }
 
@@ -353,7 +332,7 @@ static int enable_identity_mmu(const dtb_memory_t *memory, uint64_t dtb_addr) {
     return 0;
 }
 
-static void init_timer_irq_demo(void) {
+static void init_timer_irq(void) {
     board_irq_init();
     (void)irq_register_handler(TIMER_IRQ, timer_handle_irq, 0);
     (void)irq_register_handler(board_uart0_irq(), uart_irq_handler, 0);
@@ -385,20 +364,12 @@ static init_status_t init_input(void) {
     {
         uint32_t assigned = pci_assign_bars(pci_devs, pci_n,
                                             0x20000000U, 0x1000U);
-        char buf[24];
-        int p = 0;
-        const char *prefix = "PCI: ";
-        for (int i = 0; prefix[i] != 0; i++) buf[p++] = prefix[i];
-        buf[p++] = '0' + (char)(pci_n / 10);
-        buf[p++] = '0' + (char)(pci_n % 10);
-        const char *mid = " devices, ";
-        for (int i = 0; mid[i] != 0; i++) buf[p++] = mid[i];
-        buf[p++] = '0' + (char)(assigned / 10);
-        buf[p++] = '0' + (char)(assigned % 10);
-        const char *suffix = " BARs assigned\n";
-        for (int i = 0; suffix[i] != 0; i++) buf[p++] = suffix[i];
-        buf[p] = 0;
-        uart_puts(buf);
+
+        uart_puts("PCI: ");
+        print_dec64(pci_n);
+        uart_puts(" devices, ");
+        print_dec64(assigned);
+        uart_puts(" BARs assigned\n");
     }
     if (usb_init() > 0) {
         uart_puts("USB: controller initialized\n");
@@ -440,7 +411,7 @@ static init_status_t init_input(void) {
     return INIT_STATUS_OK;
 }
 
-static init_status_t start_scheduler_demo(void) {
+static init_status_t start_scheduler(void) {
     if (sched_create_kernel_thread(console_input_thread, 0, "kconsole") != 0) {
         return INIT_STATUS_FAIL;
     }
@@ -470,28 +441,27 @@ void kernel_main(uint64_t dtb_addr) {
         ipc_init();
         console_init(&memory);
         init_status_set(INIT_PHASE_CONSOLE, INIT_STATUS_OK);
-        run_pmm_smoke();
-        run_kheap_smoke();
+        kheap_init();
         init_status_set(INIT_PHASE_KHEAP, INIT_STATUS_OK);
 
         if (enable_identity_mmu(&memory, dtb_addr) == 0) {
             init_status_set(INIT_PHASE_VMM, INIT_STATUS_OK);
             init_status_set(INIT_PHASE_VFS, init_vfs());
-            init_timer_irq_demo();
+            init_timer_irq();
             init_status_set(INIT_PHASE_IRQ_TIMER, INIT_STATUS_OK);
             storage_status = probe_storage();
             init_status_set(INIT_PHASE_STORAGE, storage_status);
             if (storage_status == INIT_STATUS_OK) {
-                uart_puts("USER image source: FAT32\n");
+                uart_puts("storage app image: FAT32\n");
             } else {
-                uart_puts("USER image source: bootfs\n");
+                uart_puts("storage app image: bootfs fallback\n");
             }
             init_status_set(INIT_PHASE_DISPLAY, init_display());
             init_status_set(INIT_PHASE_NETWORK, init_network());
             init_status_set(INIT_PHASE_INPUT, init_input());
-            init_status_set(INIT_PHASE_PANEL, run_panel_boot_smoke(&memory));
+            init_status_set(INIT_PHASE_PANEL, start_panel_boot(&memory));
             console_start_interactive();
-            if (start_scheduler_demo() != INIT_STATUS_OK) {
+            if (start_scheduler() != INIT_STATUS_OK) {
                 init_status_set(INIT_PHASE_SCHED, INIT_STATUS_FAIL);
             }
         } else {

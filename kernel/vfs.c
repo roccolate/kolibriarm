@@ -28,6 +28,15 @@ typedef struct {
 
 static vfs_open_file_t g_open_files[VFS_MAX_OPEN_FILES];
 
+static vfs_open_file_t *vfs_fd_at(int fd) {
+    if (fd < 0 || fd >= (int)VFS_MAX_OPEN_FILES ||
+        g_open_files[fd].used == 0 || g_open_files[fd].node == 0) {
+        return 0;
+    }
+
+    return &g_open_files[fd];
+}
+
 static int vfs_path_equals(const char *left, const char *right) {
     if (left == 0 || right == 0) {
         return 0;
@@ -342,15 +351,14 @@ int vfs_read_fd(int fd, uint8_t *buffer, uint64_t capacity,
         *bytes_read = 0;
     }
 
-    if (fd < 0 || fd >= (int)VFS_MAX_OPEN_FILES || buffer == 0 ||
-        bytes_read == 0 || g_open_files[fd].used == 0 ||
-        g_open_files[fd].node == 0 || g_open_files[fd].node->read == 0 ||
-        g_open_files[fd].flags == VFS_O_WRONLY) {
+    if (buffer == 0 || bytes_read == 0) {
         return -1;
     }
 
-    file = &g_open_files[fd];
-    if (vfs_node_size(file->node, &size) != 0 || file->offset > size) {
+    file = vfs_fd_at(fd);
+    if (file == 0 || file->node->read == 0 ||
+        file->flags == VFS_O_WRONLY ||
+        vfs_node_size(file->node, &size) != 0 || file->offset > size) {
         return -1;
     }
 
@@ -375,15 +383,14 @@ int vfs_write_fd(int fd, const uint8_t *buffer, uint64_t size,
         *bytes_written = 0;
     }
 
-    if (fd < 0 || fd >= (int)VFS_MAX_OPEN_FILES || buffer == 0 ||
-        bytes_written == 0 || g_open_files[fd].used == 0 ||
-        g_open_files[fd].node == 0 || g_open_files[fd].node->write == 0 ||
-        g_open_files[fd].flags == VFS_O_RDONLY) {
+    if (buffer == 0 || bytes_written == 0) {
         return -1;
     }
 
-    file = &g_open_files[fd];
-    if (vfs_node_size(file->node, &current_size) != 0 ||
+    file = vfs_fd_at(fd);
+    if (file == 0 || file->node->write == 0 ||
+        file->flags == VFS_O_RDONLY ||
+        vfs_node_size(file->node, &current_size) != 0 ||
         file->offset > current_size) {
         return -1;
     }
@@ -402,13 +409,14 @@ int vfs_write_fd(int fd, const uint8_t *buffer, uint64_t size,
 int vfs_seek(int fd, uint64_t offset) {
     uint64_t size;
 
-    if (fd < 0 || fd >= (int)VFS_MAX_OPEN_FILES ||
-        g_open_files[fd].used == 0 || g_open_files[fd].node == 0 ||
-        vfs_node_size(g_open_files[fd].node, &size) != 0 || offset > size) {
+    vfs_open_file_t *file = vfs_fd_at(fd);
+
+    if (file == 0 || vfs_node_size(file->node, &size) != 0 ||
+        offset > size) {
         return -1;
     }
 
-    g_open_files[fd].offset = offset;
+    file->offset = offset;
     return 0;
 }
 

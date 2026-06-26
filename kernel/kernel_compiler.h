@@ -2,6 +2,7 @@
 #define KOLIBRIARM_KERNEL_COMPILER_H
 
 #define KERNEL_ALIGNED(n) __attribute__((aligned(n)))
+#define KERNEL_ALWAYS_INLINE inline __attribute__((always_inline))
 #define KERNEL_PACKED __attribute__((packed))
 #define KERNEL_PACKED_ALIGNED(n) __attribute__((packed, aligned(n)))
 #define KERNEL_SECTION(name) __attribute__((section(name)))

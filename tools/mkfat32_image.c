@@ -131,15 +131,15 @@ static void write_root_entries(uint8_t *image, uint32_t file_size_bytes,
                                uint32_t edit_first_cluster) {
     uint32_t data_start = RESERVED_SECTORS + FAT_COUNT * FAT_SECTORS;
     uint8_t *root = &image[data_start * SECTOR_SIZE];
-    const char user_demo_name[11] = {
-        'U', 'S', 'E', 'R', 'D', 'E', 'M', 'O', 'B', 'I', 'N',
+    const char shell_name[11] = {
+        'S', 'H', 'E', 'L', 'L', ' ', ' ', ' ', 'B', 'I', 'N',
     };
     const char edit_name[11] = {
         'E', 'D', 'I', 'T', ' ', ' ', ' ', ' ', 'T', 'X', 'T',
     };
     static const char edit_text[] = "KolibriARM editable FAT32 file\n";
 
-    write_dir_entry(root, user_demo_name, FILE_FIRST_CLUSTER,
+    write_dir_entry(root, shell_name, FILE_FIRST_CLUSTER,
                     file_size_bytes);
     write_dir_entry(root + 32U, edit_name, edit_first_cluster,
                     sizeof(edit_text) - 1U);

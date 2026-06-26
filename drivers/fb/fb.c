@@ -67,10 +67,12 @@ void fb_fillrect(fb_t *fb, uint32_t x, uint32_t y, uint32_t w, uint32_t h,
         h = fb->height - y;
     }
 
+    uint32_t *row_pixels = &fb->pixels[y * fb->stride_pixels + x];
     for (uint32_t row = 0; row < h; row++) {
         for (uint32_t col = 0; col < w; col++) {
-            fb->pixels[(y + row) * fb->stride_pixels + x + col] = color;
+            row_pixels[col] = color;
         }
+        row_pixels += fb->stride_pixels;
     }
 }
 
@@ -187,10 +189,13 @@ void fb_blit(fb_t *fb, uint32_t dst_x, uint32_t dst_y, const uint32_t *src,
         h = fb->height - dst_y;
     }
 
+    uint32_t *dst_row = &fb->pixels[dst_y * fb->stride_pixels + dst_x];
+    const uint32_t *src_row = src;
     for (uint32_t row = 0; row < h; row++) {
         for (uint32_t col = 0; col < w; col++) {
-            fb->pixels[(dst_y + row) * fb->stride_pixels + dst_x + col] =
-                src[row * src_stride + col];
+            dst_row[col] = src_row[col];
         }
+        dst_row += fb->stride_pixels;
+        src_row += src_stride;
     }
 }

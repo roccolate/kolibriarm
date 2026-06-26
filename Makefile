@@ -336,9 +336,11 @@ qemu-fs-test: qemu-check entry-check $(KERNEL_BIN) $(VIRTIO_BLK_IMG)
 	        { cat $(QEMU_FS_TEST_LOG); exit 1; }; \
 	    grep -q "FAT32 root: mounted" $(QEMU_FS_TEST_LOG) || \
 	        { cat $(QEMU_FS_TEST_LOG); exit 1; }; \
+	    grep -q "FAT32 shell bytes:" $(QEMU_FS_TEST_LOG) || \
+	        { cat $(QEMU_FS_TEST_LOG); exit 1; }; \
 	    grep -q "FAT32 edit file: mounted" $(QEMU_FS_TEST_LOG) || \
 	        { cat $(QEMU_FS_TEST_LOG); exit 1; }; \
-	    grep -q "USER image source: FAT32" $(QEMU_FS_TEST_LOG) || \
+	    grep -q "storage app image: FAT32" $(QEMU_FS_TEST_LOG) || \
 	        { cat $(QEMU_FS_TEST_LOG); exit 1; }; \
 	    printf "qemu-fs-test: log %s\n" "$(QEMU_FS_TEST_LOG)"
 

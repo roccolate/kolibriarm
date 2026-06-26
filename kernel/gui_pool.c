@@ -3,6 +3,7 @@
 #include "fb/fb.h"
 #include "kernel/gui_backing.h"
 #include "kernel/gui_internal.h"
+#include "kernel/kernel_compiler.h"
 
 static int gui_str_eq(const char *a, const char *b) {
     uint32_t i = 0;
@@ -36,6 +37,22 @@ static void gui_apply_builtin_policy(gui_window_t *window) {
     if (gui_str_eq(window->title, "panel")) {
         window->flags |= GUI_WINDOW_DOCK | GUI_WINDOW_NO_FOCUS |
                          GUI_WINDOW_NO_DRAG | GUI_WINDOW_SKIP_TASKBAR;
+    }
+}
+
+static KERNEL_ALWAYS_INLINE void gui_window_set_title(gui_window_t *window,
+                                                      const char *title) {
+    for (uint32_t i = 0; i < GUI_TITLE_LEN; i++) {
+        window->title[i] = '\0';
+    }
+    if (title == 0) {
+        return;
+    }
+    for (uint32_t i = 0; i + 1U < GUI_TITLE_LEN; i++) {
+        if (title[i] == '\0') {
+            break;
+        }
+        window->title[i] = title[i];
     }
 }
 
@@ -96,17 +113,7 @@ int gui_create_window_for_pid(gui_desktop_t *desktop, uint32_t owner_pid,
             window->cursor_regions[j].shape = 0;
             window->cursor_regions[j].used = 0;
         }
-        for (uint32_t j = 0; j < GUI_TITLE_LEN; j++) {
-            window->title[j] = '\0';
-        }
-        if (title != 0) {
-            for (uint32_t j = 0; j + 1U < GUI_TITLE_LEN; j++) {
-                if (title[j] == '\0') {
-                    break;
-                }
-                window->title[j] = title[j];
-            }
-        }
+        gui_window_set_title(window, title);
         window->used = 1;
         window->minimized = 0U;
         gui_apply_builtin_policy(window);
@@ -169,9 +176,7 @@ int gui_destroy_window(gui_desktop_t *desktop, uint32_t window_id) {
         window->cursor_regions[j].shape = 0;
         window->cursor_regions[j].used = 0;
     }
-    for (uint32_t j = 0; j < GUI_TITLE_LEN; j++) {
-        window->title[j] = '\0';
-    }
+    gui_window_set_title(window, 0);
 
     if (desktop->focused_window_id == window_id) {
         desktop->focused_window_id = GUI_NO_WINDOW;
@@ -205,17 +210,7 @@ int gui_window_set_title_internal(gui_desktop_t *desktop, uint32_t window_id,
     }
 
     window = &desktop->windows[window_id];
-    for (uint32_t j = 0; j < GUI_TITLE_LEN; j++) {
-        window->title[j] = '\0';
-    }
-    if (title != 0) {
-        for (uint32_t j = 0; j + 1U < GUI_TITLE_LEN; j++) {
-            if (title[j] == '\0') {
-                break;
-            }
-            window->title[j] = title[j];
-        }
-    }
+    gui_window_set_title(window, title);
     gui_apply_builtin_policy(window);
     gui_refresh_cursor_shape(desktop);
     if (window->title_h > 0U) {

@@ -821,7 +821,7 @@ int fat32_write(fat32_fs_t *fs, fat32_file_t *file, uint64_t offset,
         }
     }
 
-    while (remaining > 0 || (remaining == 0 && size == 0)) {
+    while (remaining > 0) {
         uint64_t cluster_offset = skip;
 
         if (cluster_is_eoc(cluster)) {
@@ -1045,11 +1045,11 @@ int fat32_delete(fat32_fs_t *fs, const char *name) {
 
 int fat32_rename(fat32_fs_t *fs, const char *old_name, const char *new_name) {
     fat32_file_t file;
-    uint8_t short_name[11];
+    fat32_file_t existing;
+    uint8_t new_short[11];
 
     if (fs == 0 || fs->mounted == 0 || fs->write_sector == 0 ||
-        make_short_name(old_name, short_name) != 0 ||
-        make_short_name(new_name, short_name) != 0) {
+        make_short_name(new_name, new_short) != 0) {
         return -1;
     }
 
@@ -1058,11 +1058,6 @@ int fat32_rename(fat32_fs_t *fs, const char *old_name, const char *new_name) {
     }
 
     /* Reject the rename if the destination already exists. */
-    uint8_t new_short[11];
-    if (make_short_name(new_name, new_short) != 0) {
-        return -1;
-    }
-    fat32_file_t existing;
     if (fat32_open_root(fs, new_name, &existing) == 0) {
         return -1;
     }
