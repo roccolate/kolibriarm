@@ -28,6 +28,15 @@ static uint64_t align_up(uint64_t value, uint64_t alignment) {
     return (value + alignment - 1ULL) & ~(alignment - 1ULL);
 }
 
+static int user_region_end(uint64_t start, uint64_t size, uint64_t *end) {
+    if (size == 0 || end == 0 || start > UINT64_MAX - size) {
+        return -1;
+    }
+
+    *end = start + size;
+    return 0;
+}
+
 static int process_in_table(const process_t *process) {
     uintptr_t addr = (uintptr_t)process;
     uintptr_t start = (uintptr_t)&g_processes[0];
@@ -418,13 +427,9 @@ void process_mark_exited(process_t *process, uint64_t exit_code) {
 int process_add_user_region(process_t *process, uint64_t start, uint64_t size) {
     uint64_t end;
 
-    if (process == 0 || size == 0 ||
-        process->user_region_count >= PROCESS_MAX_USER_REGIONS) {
-        return -1;
-    }
-
-    end = start + size;
-    if (end < start) {
+    if (process == 0 ||
+        process->user_region_count >= PROCESS_MAX_USER_REGIONS ||
+        user_region_end(start, size, &end) != 0) {
         return -1;
     }
 
@@ -448,6 +453,7 @@ int process_add_user_region(process_t *process, uint64_t start, uint64_t size) {
 int process_alloc_user_region(process_t *process, uint64_t size, uint64_t *addr) {
     uint64_t aligned_size;
     uint64_t start;
+    uint64_t end;
 
     if (process == 0 || addr == 0 || size == 0) {
         return -1;
@@ -460,8 +466,8 @@ int process_alloc_user_region(process_t *process, uint64_t size, uint64_t *addr)
 
     start = align_up(process->next_user_vaddr, USER_REGION_ALIGN);
     if (start < process->next_user_vaddr ||
-        start + aligned_size < start ||
-        start + aligned_size > PROCESS_USER_MMAP_LIMIT) {
+        user_region_end(start, aligned_size, &end) != 0 ||
+        end > PROCESS_USER_MMAP_LIMIT) {
         return -1;
     }
 
@@ -469,7 +475,7 @@ int process_alloc_user_region(process_t *process, uint64_t size, uint64_t *addr)
         return -1;
     }
 
-    process->next_user_vaddr = start + aligned_size;
+    process->next_user_vaddr = end;
     *addr = start;
 
     return 0;
@@ -480,12 +486,7 @@ int process_set_user_region_mapping(process_t *process, uint64_t start,
                                     uint64_t flags) {
     uint64_t end;
 
-    if (process == 0 || size == 0) {
-        return -1;
-    }
-
-    end = start + size;
-    if (end < start) {
+    if (process == 0 || user_region_end(start, size, &end) != 0) {
         return -1;
     }
 
@@ -506,12 +507,7 @@ int process_find_user_region(const process_t *process, uint64_t start,
                              uint64_t size, process_user_region_t *out) {
     uint64_t end;
 
-    if (process == 0 || size == 0) {
-        return -1;
-    }
-
-    end = start + size;
-    if (end < start) {
+    if (process == 0 || user_region_end(start, size, &end) != 0) {
         return -1;
     }
 
@@ -532,12 +528,7 @@ int process_remove_user_region_info(process_t *process, uint64_t start,
                                     process_user_region_t *removed) {
     uint64_t end;
 
-    if (process == 0 || size == 0) {
-        return -1;
-    }
-
-    end = start + size;
-    if (end < start) {
+    if (process == 0 || user_region_end(start, size, &end) != 0) {
         return -1;
     }
 
@@ -577,8 +568,7 @@ int process_user_range_contains(const process_t *process, uint64_t start,
         return 1;
     }
 
-    end = start + size;
-    if (end < start) {
+    if (user_region_end(start, size, &end) != 0) {
         return 0;
     }
 

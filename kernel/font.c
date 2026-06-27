@@ -116,7 +116,7 @@ static const uint8_t
 };
 
 static KERNEL_ALWAYS_INLINE const uint8_t *font_glyph(char ch) {
-    uint8_t index = (uint8_t)ch & 0x7fU;
+    uint8_t index = (uint8_t)ch;
 
     if (index < FONT_FIRST_GLYPH || index > FONT_LAST_GLYPH) {
         return 0;

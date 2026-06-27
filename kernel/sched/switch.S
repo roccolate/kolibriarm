@@ -1,4 +1,11 @@
 .section .text
+
+// Cooperative kernel-thread context switch.
+//
+// The C scheduler owns thread selection. This boundary only preserves the
+// AArch64 callee-saved register set plus SP/LR, matching sched_context_t in
+// sched.c. New kernel threads enter through sched_thread_trampoline with x19 as
+// the entry function and x20 as its argument.
 .global switch_context
 .type switch_context, %function
 

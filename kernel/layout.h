@@ -6,7 +6,11 @@
 
 /*
  * C-owned user address layout for the fixed per-process image and stack
- * slots. The kernel link base and boot stack size still live in linker.ld.
+ * slots. These values describe virtual addresses only; backing pages are
+ * allocated per process by panel_boot/user_vm code.
+ *
+ * The kernel link base and boot stack size still live in linker.ld because the
+ * linker script is not generated from C headers.
  */
 #define KERNEL_USER_IMAGE_VA_BASE 0x400000ULL
 #define KERNEL_USER_IMAGE_VA_STRIDE 0x10000ULL

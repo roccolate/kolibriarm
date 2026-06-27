@@ -5,6 +5,15 @@
 
 #include "kernel/mm/pmm.h"
 
+/*
+ * Simple PMM-backed kernel heap.
+ *
+ * The heap grows by whole physical-page arenas and keeps a doubly linked list
+ * of blocks inside those arenas. Blocks coalesce only when they are adjacent in
+ * the same arena; the heap does not return arenas to the PMM yet, because the
+ * current kernel workload benefits more from predictable reuse than trimming.
+ */
+
 #define KHEAP_ALIGN       16ULL
 #define KHEAP_MIN_SPLIT   32ULL
 

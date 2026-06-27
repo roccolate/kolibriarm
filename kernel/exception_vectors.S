@@ -1,4 +1,12 @@
 .section .text
+
+// EL1 exception vector table and common entries.
+//
+// The lower-EL sync/IRQ entries build the exception_frame_t layout from
+// kernel/exceptions.h on the current EL1 stack:
+//   x0..x30 at offsets 0..240, ELR at 248, SPSR at 256, SP_EL0 at 264.
+// The allocated frame is 288 bytes so SP remains 16-byte aligned across calls
+// into C handlers.
 .global exception_init
 .type exception_init, %function
 

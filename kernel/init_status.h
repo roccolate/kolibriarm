@@ -3,6 +3,15 @@
 
 #include <stdint.h>
 
+/*
+ * Boot-phase status table.
+ *
+ * kernel_main records each major init phase here and the interactive console
+ * reads the table through init_status_at. The table is fixed-size and keeps one
+ * status byte per phase; callers should treat invalid phases as programming
+ * errors, not dynamic runtime input.
+ */
+
 typedef enum {
     INIT_PHASE_BOARD = 0,
     INIT_PHASE_DTB,

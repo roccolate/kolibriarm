@@ -25,7 +25,7 @@ SRCS=unity/unity.c main.c \
      test_user_image_runtime.c \
      test_panel_boot_argv.c \
      test_panel_boot_recovery.c \
-     test_vfs.c test_tmpfs.c test_fat32.c test_dhcp_options.c \
+     test_irq.c test_sched.c test_vfs.c test_tmpfs.c test_fat32.c test_dhcp_options.c \
      test_ipc.c test_font.c \
      test_gui.c test_fb.c test_dtb.c test_virtio_blk.c test_input.c \
      test_hid.c test_pci.c test_hid_driver.c test_usb_core.c \
@@ -41,7 +41,8 @@ SRCS=unity/unity.c main.c \
      ../kernel/gui_events.c ../kernel/gui_input.c ../kernel/gui_pool.c \
      ../kernel/gui_compositor.c \
      ../kernel/init_status.c \
-     ../kernel/ipc.c ../kernel/process.c \
+     ../kernel/ipc.c ../kernel/irq.c ../kernel/process.c \
+     ../kernel/sched/sched.c \
      ../kernel/tmpfs.c ../kernel/syscall_helpers.c \
      ../kernel/user_image.c ../kernel/user_vm.c ../kernel/vfs.c \
      ../kernel/dtb.c ../kernel/dtb_framebuffer.c \

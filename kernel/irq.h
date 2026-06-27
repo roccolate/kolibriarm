@@ -5,6 +5,15 @@
 
 #include "kernel/exceptions.h"
 
+/*
+ * Minimal IRQ callback registry.
+ *
+ * Handlers run in EL1 interrupt context, must not block, and receive only their
+ * registration context. irq_handler_frame is entered from the exception vector
+ * when an interrupted EL0 frame is available; irq_handler covers early/kernel
+ * IRQ paths that have no user frame to reschedule from.
+ */
+
 typedef void (*irq_handler_fn_t)(void *context);
 
 int irq_register_handler(uint32_t irq, irq_handler_fn_t handler, void *context);

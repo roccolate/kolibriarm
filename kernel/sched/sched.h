@@ -3,6 +3,14 @@
 
 #include <stdint.h>
 
+/*
+ * Small cooperative scheduler for EL1 helper threads.
+ *
+ * User processes are scheduled through process_dispatch_next from syscall,
+ * fault, and IRQ paths. This API is only for kernel threads that voluntarily
+ * yield or exit after being started by sched_start.
+ */
+
 typedef void (*sched_thread_fn_t)(void *arg);
 
 void sched_init(uint32_t quantum_ticks);

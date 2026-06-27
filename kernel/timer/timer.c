@@ -7,8 +7,17 @@
 
 void kernel_on_timer_tick(void);
 
+/*
+ * AArch64 physical timer driver.
+ *
+ * timer_init programs CNTP_TVAL/CTL using CNTFRQ_EL0. Each interrupt pumps
+ * UART input, lets the kernel poll input/rendering work, and then advances the
+ * scheduler tick. Keep policy out of the register helpers below.
+ */
+
 static uint64_t g_ticks;
 static uint64_t g_interval_ticks;
+
 static uint64_t read_cntfrq(void) {
     uint64_t value;
 

@@ -37,6 +37,26 @@ static uint64_t page_align_up(uint64_t value) {
     return (value + PAGE_SIZE - 1ULL) & ~(PAGE_SIZE - 1ULL);
 }
 
+static int page_span(uint64_t offset, uint64_t size, uint64_t *span) {
+    uint64_t end;
+
+    if (span == 0 || size == 0 || offset >= PAGE_SIZE) {
+        return -1;
+    }
+    if (size > UINT64_MAX - offset) {
+        return -1;
+    }
+
+    end = offset + size;
+    if ((end & (PAGE_SIZE - 1ULL)) != 0 &&
+        end > UINT64_MAX - (PAGE_SIZE - 1ULL)) {
+        return -1;
+    }
+
+    *span = page_align_up(end);
+    return 0;
+}
+
 static uint64_t table_index(uint64_t vaddr, uint32_t level) {
     return (vaddr >> (39U - level * 9U)) & TABLE_INDEX_MASK;
 }
@@ -187,10 +207,19 @@ int vmm_map_range(uint64_t *pgd, uint64_t vaddr, uint64_t paddr,
     aligned_vaddr = page_align_down(vaddr);
     aligned_paddr = page_align_down(paddr);
     offset = vaddr - aligned_vaddr;
-    end = page_align_up(offset + size);
+    if (page_span(offset, size, &end) != 0 ||
+        aligned_vaddr > UINT64_MAX - end ||
+        aligned_paddr > UINT64_MAX - end) {
+        return -1;
+    }
 
     for (uint64_t mapped = 0; mapped < end; mapped += PAGE_SIZE) {
-        if (vmm_map_page(pgd, aligned_vaddr + mapped, aligned_paddr + mapped, flags) != 0) {
+        if (vmm_map_page(pgd, aligned_vaddr + mapped,
+                         aligned_paddr + mapped, flags) != 0) {
+            for (uint64_t rollback = 0; rollback < mapped;
+                 rollback += PAGE_SIZE) {
+                (void)vmm_unmap_page(pgd, aligned_vaddr + rollback);
+            }
             return -1;
         }
     }
@@ -256,7 +285,10 @@ int vmm_unmap_range(uint64_t *pgd, uint64_t vaddr, uint64_t size) {
 
     aligned_vaddr = page_align_down(vaddr);
     offset = vaddr - aligned_vaddr;
-    end = page_align_up(offset + size);
+    if (page_span(offset, size, &end) != 0 ||
+        aligned_vaddr > UINT64_MAX - end) {
+        return -1;
+    }
 
     for (uint64_t unmapped = 0; unmapped < end; unmapped += PAGE_SIZE) {
         if (vmm_unmap_page(pgd, aligned_vaddr + unmapped) != 0) {

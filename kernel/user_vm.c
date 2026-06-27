@@ -12,7 +12,9 @@
  * loader also uses user_vm_map_physical for fixed image and stack regions
  * that were registered on the process before mapping. Anonymous mappings are
  * process-owned and must carry PROCESS_USER_REGION_OWNED_PAGES so
- * process_release can return their PMM pages.
+ * process_release can return their PMM pages. Page-table installation is
+ * delegated to VMM, whose range mapping rolls back partial leaf mappings before
+ * returning failure.
  */
 
 #define USER_VM_SUPPORTED_FLAGS \

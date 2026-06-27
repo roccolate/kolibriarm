@@ -8,6 +8,14 @@
 
 #define IRQ_HANDLER_SLOTS 64U
 
+/*
+ * EL1 IRQ dispatch table.
+ *
+ * Board code owns interrupt-controller acknowledge/end details. This layer only
+ * maps interrupt IDs to small callbacks, saves the interrupted EL0 context when
+ * a trap frame is present, and then gives the scheduler one preemption point.
+ */
+
 typedef struct {
     irq_handler_fn_t handler;
     void *context;

@@ -3,6 +3,11 @@
 
 #include <stdint.h>
 
+/*
+ * Saved general-purpose and exception-return state captured by the AArch64
+ * exception vector. EL0 syscall, fault, and IRQ paths pass this frame through
+ * syscall, process-dispatch, and user-fault handling.
+ */
 typedef struct {
     uint64_t x[31];
     uint64_t elr;

@@ -152,6 +152,40 @@ void test_process_user_region_mapping_metadata_round_trips(void) {
     TEST_ASSERT_EQUAL_UINT64(0, process.user_regions[0].flags);
 }
 
+void test_process_user_region_helpers_reject_overflowing_ranges(void) {
+    process_t process;
+    process_user_region_t region;
+
+    process_init(&process, 16, "overflow");
+
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
+                             (uint64_t)process_add_user_region(
+                                 &process, UINT64_MAX - 0x10ULL, 0x20ULL));
+    TEST_ASSERT_EQUAL_UINT64(0, process.user_region_count);
+
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)process_add_user_region(
+                                    &process, 0x7000ULL, 0x1000ULL));
+
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
+                             (uint64_t)process_find_user_region(
+                                 &process, UINT64_MAX - 0x10ULL, 0x20ULL,
+                                 &region));
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
+                             (uint64_t)process_set_user_region_mapping(
+                                 &process, UINT64_MAX - 0x10ULL, 0x20ULL,
+                                 0x100000ULL,
+                                 PROCESS_USER_REGION_OWNED_PAGES));
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
+                             (uint64_t)process_remove_user_region(
+                                 &process, UINT64_MAX - 0x10ULL, 0x20ULL));
+
+    TEST_ASSERT_TRUE(!process_user_range_contains(
+        &process, UINT64_MAX - 0x10ULL, 0x20ULL));
+    TEST_ASSERT_EQUAL_UINT64(1, process.user_region_count);
+    TEST_ASSERT_TRUE(process_user_range_contains(&process, 0x7000ULL,
+                                                 0x1000ULL));
+}
+
 void test_process_alloc_user_region_bumps_page_aligned_arena(void) {
     process_t process;
     uint64_t first = 0;

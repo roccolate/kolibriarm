@@ -33,6 +33,18 @@ static void assert_kheap_basic_alloc_free(void) {
     TEST_ASSERT_TRUE(free_after >= free_before);
 }
 
+static void assert_kheap_rejects_empty_and_impossible_allocations(void) {
+    reset_test_heap();
+
+    uint64_t free_before = kheap_free_bytes();
+
+    TEST_ASSERT_NULL(kmalloc(0));
+    TEST_ASSERT_NULL(kmalloc((size_t)-1));
+    kfree(NULL);
+
+    TEST_ASSERT_EQUAL_UINT64(free_before, kheap_free_bytes());
+}
+
 static void assert_kheap_allocates_larger_than_one_page(void) {
     reset_test_heap();
 
@@ -103,10 +115,15 @@ static void assert_kheap_large_alloc_free_cycles_remain_usable(void) {
 
 void test_kheap_basic_alloc_free(void) {
     assert_kheap_basic_alloc_free();
+    assert_kheap_rejects_empty_and_impossible_allocations();
     assert_kheap_allocates_larger_than_one_page();
     assert_kheap_allocates_panel_sized_backing_buffer();
     assert_kheap_reuses_large_freed_block_for_small_allocations();
     assert_kheap_large_alloc_free_cycles_remain_usable();
+}
+
+void test_kheap_rejects_empty_and_impossible_allocations(void) {
+    assert_kheap_rejects_empty_and_impossible_allocations();
 }
 
 void test_kheap_allocates_larger_than_one_page(void) {

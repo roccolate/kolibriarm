@@ -3,13 +3,21 @@
 #include <stdint.h>
 
 #include "kernel/aarch64_state.h"
-#include "kernel/gui.h"
 #include "kernel/print.h"
 #include "kernel/process.h"
 #include "kernel/syscall.h"
 #include "kernel/panel_boot.h"
 #include "kernel/user_exit.h"
 #include "uart/pl011.h"
+
+/*
+ * EL1 exception diagnostics and lower-EL synchronous dispatch.
+ *
+ * SVC exceptions are syscall entries. Other lower-EL synchronous exceptions are
+ * treated as user faults: the process becomes a zombie, owned resources are
+ * released through process_mark_exited, and the scheduler gets a chance to run
+ * the next ready process before falling back to the EL0 return trampoline.
+ */
 
 #define ESR_EC_SHIFT 26U
 #define ESR_EC_MASK  0x3fULL
@@ -106,7 +114,8 @@ static void handle_user_fault(exception_frame_t *frame, uint64_t esr,
     frame->spsr = AARCH64_SPSR_EL1H_DAIF_MASKED;
 }
 
-void exception_lower_sync_handler(exception_frame_t *frame, uint64_t esr, uint64_t far) {
+void exception_lower_sync_handler(exception_frame_t *frame, uint64_t esr,
+                                  uint64_t far) {
     uint64_t ec = (esr >> ESR_EC_SHIFT) & ESR_EC_MASK;
 
     if (ec == ESR_EC_SVC64) {

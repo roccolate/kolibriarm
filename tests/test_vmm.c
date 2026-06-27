@@ -68,6 +68,70 @@ void test_vmm_map_range_and_unmap_range(void) {
     free(mem);
 }
 
+void test_vmm_map_range_rejects_overflowing_span(void) {
+    void *mem = NULL;
+    init_test_memory(&mem);
+
+    uint64_t *pgd = vmm_new_table();
+    uint64_t page = pmm_alloc_page();
+
+    TEST_ASSERT_NOT_NULL(pgd);
+    TEST_ASSERT_TRUE(page != 0);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
+                             (uint64_t)vmm_map_range(
+                                 pgd, UINT64_MAX - 0xffULL,
+                                 page + PAGE_SIZE - 0x100ULL,
+                                 0x200ULL,
+                                 VMM_FLAG_READ | VMM_FLAG_WRITE));
+
+    free(mem);
+}
+
+void test_vmm_map_range_rolls_back_partial_failure(void) {
+    void *mem = NULL;
+    init_test_memory(&mem);
+
+    uint64_t *pgd = vmm_new_table();
+    uint64_t first_page = pmm_alloc_page();
+    uint64_t conflict_page = pmm_alloc_page();
+    uint64_t new_pages = pmm_alloc_pages(2);
+    uint64_t vaddr = 0xa00000ULL;
+
+    TEST_ASSERT_NOT_NULL(pgd);
+    TEST_ASSERT_TRUE(first_page != 0);
+    TEST_ASSERT_TRUE(conflict_page != 0);
+    TEST_ASSERT_TRUE(new_pages != 0);
+
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)vmm_map_page(
+                                    pgd, vaddr + PAGE_SIZE, conflict_page,
+                                    VMM_FLAG_READ | VMM_FLAG_WRITE));
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
+                             (uint64_t)vmm_map_range(
+                                 pgd, vaddr, new_pages, PAGE_SIZE * 2,
+                                 VMM_FLAG_READ | VMM_FLAG_WRITE));
+
+    TEST_ASSERT_EQUAL_UINT64(0, vmm_virt_to_phys(pgd, vaddr));
+    TEST_ASSERT_EQUAL_UINT64(conflict_page,
+                             vmm_virt_to_phys(pgd, vaddr + PAGE_SIZE));
+
+    (void)first_page;
+    free(mem);
+}
+
+void test_vmm_unmap_range_rejects_overflowing_span(void) {
+    void *mem = NULL;
+    init_test_memory(&mem);
+
+    uint64_t *pgd = vmm_new_table();
+
+    TEST_ASSERT_NOT_NULL(pgd);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
+                             (uint64_t)vmm_unmap_range(
+                                 pgd, UINT64_MAX - 0xffULL, 0x200ULL));
+
+    free(mem);
+}
+
 void test_vmm_user_exec_mapping_flags(void) {
     void *mem = NULL;
     init_test_memory(&mem);

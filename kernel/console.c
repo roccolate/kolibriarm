@@ -14,6 +14,14 @@
 
 #define CONSOLE_LINE_MAX 64U
 
+/*
+ * Interactive kernel console.
+ *
+ * The console owns serial line editing and command dispatch. Plain formatting
+ * helpers stay in print.c so boot logs and interactive commands share numeric
+ * output without sharing command-line state.
+ */
+
 static char g_line[CONSOLE_LINE_MAX];
 static uint32_t g_line_len;
 static dtb_memory_t g_memory;
@@ -32,17 +40,31 @@ typedef struct {
     uint8_t id;
 } k_command_t;
 
-#define COMMAND_TEXT_HELP   0U
-#define COMMAND_TEXT_MEM    5U
-#define COMMAND_TEXT_PS     9U
-#define COMMAND_TEXT_TICKS  12U
-#define COMMAND_TEXT_STATUS 18U
-#define COMMAND_TEXT_MOUSE  25U
-#define COMMAND_TEXT_CLICK  31U
-#define COMMAND_TEXT_KEY    37U
-#define COMMAND_TEXT_EMPTY  41U
-#define COMMAND_TEXT_XY     42U
-#define COMMAND_TEXT_CHAR   50U
+#define COMMAND_NAME_HELP   "help"
+#define COMMAND_NAME_MEM    "mem"
+#define COMMAND_NAME_PS     "ps"
+#define COMMAND_NAME_TICKS  "ticks"
+#define COMMAND_NAME_STATUS "status"
+#define COMMAND_NAME_MOUSE  "mouse"
+#define COMMAND_NAME_CLICK  "click"
+#define COMMAND_NAME_KEY    "key"
+#define COMMAND_HELP_EMPTY  ""
+#define COMMAND_HELP_XY     "<x> <y>"
+#define COMMAND_HELP_CHAR   "<char>"
+
+enum {
+    COMMAND_TEXT_HELP = 0,
+    COMMAND_TEXT_MEM = COMMAND_TEXT_HELP + sizeof(COMMAND_NAME_HELP),
+    COMMAND_TEXT_PS = COMMAND_TEXT_MEM + sizeof(COMMAND_NAME_MEM),
+    COMMAND_TEXT_TICKS = COMMAND_TEXT_PS + sizeof(COMMAND_NAME_PS),
+    COMMAND_TEXT_STATUS = COMMAND_TEXT_TICKS + sizeof(COMMAND_NAME_TICKS),
+    COMMAND_TEXT_MOUSE = COMMAND_TEXT_STATUS + sizeof(COMMAND_NAME_STATUS),
+    COMMAND_TEXT_CLICK = COMMAND_TEXT_MOUSE + sizeof(COMMAND_NAME_MOUSE),
+    COMMAND_TEXT_KEY = COMMAND_TEXT_CLICK + sizeof(COMMAND_NAME_CLICK),
+    COMMAND_TEXT_EMPTY = COMMAND_TEXT_KEY + sizeof(COMMAND_NAME_KEY),
+    COMMAND_TEXT_XY = COMMAND_TEXT_EMPTY + sizeof(COMMAND_HELP_EMPTY),
+    COMMAND_TEXT_CHAR = COMMAND_TEXT_XY + sizeof(COMMAND_HELP_XY),
+};
 
 #define COMMAND_ID_HELP   0U
 #define COMMAND_ID_MEM    1U
@@ -54,7 +76,20 @@ typedef struct {
 #define COMMAND_ID_KEY    7U
 
 static const char g_command_text[] =
-    "help\0mem\0ps\0ticks\0status\0mouse\0click\0key\0\0<x> <y>\0<char>";
+    COMMAND_NAME_HELP "\0"
+    COMMAND_NAME_MEM "\0"
+    COMMAND_NAME_PS "\0"
+    COMMAND_NAME_TICKS "\0"
+    COMMAND_NAME_STATUS "\0"
+    COMMAND_NAME_MOUSE "\0"
+    COMMAND_NAME_CLICK "\0"
+    COMMAND_NAME_KEY "\0"
+    COMMAND_HELP_EMPTY "\0"
+    COMMAND_HELP_XY "\0"
+    COMMAND_HELP_CHAR;
+
+_Static_assert(sizeof(g_command_text) <= 256U,
+               "command text offsets must fit in uint8_t");
 
 static const k_command_t g_commands[] = {
     {COMMAND_TEXT_HELP, COMMAND_TEXT_EMPTY, COMMAND_ID_HELP},

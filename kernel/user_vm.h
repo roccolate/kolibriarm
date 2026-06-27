@@ -11,6 +11,9 @@
  * flags=0 maps anonymous memory as readable/writable. Non-zero flags must be
  * a combination of USER_VM_PROT_* bits; MAP_SHARED and MAP_FIXED are reserved
  * at the syscall ABI level but intentionally rejected here until implemented.
+ * Anonymous mappings allocate PMM pages and mark the process region as owned;
+ * physical mappings install an existing registered range without taking PMM
+ * ownership.
  */
 
 #define USER_VM_PROT_READ  0x01ULL

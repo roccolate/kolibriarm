@@ -1,5 +1,6 @@
 #include "kernel/sched/sched.h"
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include "kernel/irq.h"
@@ -8,6 +9,15 @@
 
 #define SCHED_MAX_THREADS 4U
 #define SCHED_STACK_PAGES 4ULL
+
+/*
+ * Cooperative kernel-thread scheduler.
+ *
+ * EL0 process preemption is handled by process_dispatch_next through the IRQ
+ * trap frame. This scheduler is only for EL1 helper threads such as the serial
+ * console poller. switch.S saves exactly sched_context_t, so keep the layout
+ * asserts below in sync with that assembly boundary.
+ */
 
 typedef struct {
     uint64_t x19;
@@ -24,6 +34,25 @@ typedef struct {
     uint64_t sp;
     uint64_t lr;
 } sched_context_t;
+
+_Static_assert(offsetof(sched_context_t, x19) == 0U,
+               "switch.S x19 offset");
+_Static_assert(offsetof(sched_context_t, x21) == 16U,
+               "switch.S x21 offset");
+_Static_assert(offsetof(sched_context_t, x23) == 32U,
+               "switch.S x23 offset");
+_Static_assert(offsetof(sched_context_t, x25) == 48U,
+               "switch.S x25 offset");
+_Static_assert(offsetof(sched_context_t, x27) == 64U,
+               "switch.S x27 offset");
+_Static_assert(offsetof(sched_context_t, x29) == 80U,
+               "switch.S x29 offset");
+_Static_assert(offsetof(sched_context_t, sp) == 88U,
+               "switch.S sp offset");
+_Static_assert(offsetof(sched_context_t, lr) == 96U,
+               "switch.S lr offset");
+_Static_assert(sizeof(sched_context_t) == 104U,
+               "switch.S context size");
 
 typedef enum {
     THREAD_UNUSED = 0,
@@ -51,6 +80,12 @@ static uint32_t g_next_pid = 1;
 
 void switch_context(sched_context_t *old_context, sched_context_t *new_context);
 void sched_thread_trampoline(void);
+
+static void sched_wait_for_event(void) {
+#ifndef KOLIBRIARM_TEST
+    __asm__ volatile("wfe");
+#endif
+}
 
 void sched_init(uint32_t quantum_ticks) {
     if (quantum_ticks == 0) {
@@ -195,7 +230,7 @@ void sched_thread_exit(void) {
         uart_puts("SCHED idle: no runnable threads\n");
         irq_enable();
         for (;;) {
-            __asm__ volatile("wfe");
+            sched_wait_for_event();
         }
     }
 
@@ -204,7 +239,7 @@ void sched_thread_exit(void) {
     switch_context(&old_thread->context, &next_thread->context);
 
     for (;;) {
-        __asm__ volatile("wfe");
+        sched_wait_for_event();
     }
 }
 

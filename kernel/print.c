@@ -2,6 +2,13 @@
 
 #include "uart/pl011.h"
 
+/*
+ * Boot/kernel numeric printing.
+ *
+ * These helpers write directly to UART and intentionally do not own console
+ * line discipline, command parsing, buffering, or printf-style formatting.
+ */
+
 void print_hex64(uint64_t value) {
     static const char digits[] = "0123456789abcdef";
 

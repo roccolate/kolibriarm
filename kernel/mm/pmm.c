@@ -2,6 +2,15 @@
 
 #include <stdint.h>
 
+/*
+ * Physical page allocator.
+ *
+ * The PMM owns one fixed bitmap for the first PMM_MAX_MEMORY bytes reported by
+ * the board RAM map. A set bit means "used/reserved"; a clear bit means "free".
+ * Callers pass physical addresses, and allocation always returns PAGE_SIZE
+ * aligned pages from the initialized range.
+ */
+
 #define PMM_MAX_MEMORY (128ULL * 1024ULL * 1024ULL)
 #define PMM_MAX_PAGES  (PMM_MAX_MEMORY / PAGE_SIZE)
 #define BITS_PER_WORD  64ULL
@@ -17,6 +26,27 @@ static uint64_t align_down(uint64_t value) {
 
 static uint64_t align_up(uint64_t value) {
     return (value + PAGE_SIZE - 1ULL) & ~(PAGE_SIZE - 1ULL);
+}
+
+static uint64_t add_saturated(uint64_t a, uint64_t b) {
+    if (a > UINT64_MAX - b) {
+        return UINT64_MAX;
+    }
+    return a + b;
+}
+
+static uint64_t align_up_saturated(uint64_t value) {
+    if ((value & (PAGE_SIZE - 1ULL)) == 0) {
+        return value;
+    }
+    if (value > UINT64_MAX - (PAGE_SIZE - 1ULL)) {
+        return UINT64_MAX;
+    }
+    return align_up(value);
+}
+
+static uint64_t managed_end(void) {
+    return add_saturated(g_mem_base, g_total_pages * PAGE_SIZE);
 }
 
 static void set_used(uint64_t page) {
@@ -59,23 +89,34 @@ void pmm_init(uint64_t mem_base, uint64_t mem_size) {
 
 void pmm_reserve_range(uint64_t start, uint64_t size) {
     uint64_t end;
+    uint64_t limit;
     uint64_t page_start;
     uint64_t page_end;
 
-    if (size == 0 || start < g_mem_base) {
+    if (size == 0 || g_total_pages == 0) {
         return;
     }
 
-    end = align_up(start + size);
-    page_start = (align_down(start) - g_mem_base) / PAGE_SIZE;
-    page_end = (end - g_mem_base) / PAGE_SIZE;
+    end = add_saturated(start, size);
+    limit = managed_end();
 
-    if (page_start >= g_total_pages) {
+    if (end <= g_mem_base || start >= limit) {
         return;
     }
 
-    if (page_end > g_total_pages) {
+    if (start < g_mem_base) {
+        page_start = 0;
+    } else {
+        page_start = (align_down(start) - g_mem_base) / PAGE_SIZE;
+    }
+
+    if (end >= limit) {
         page_end = g_total_pages;
+    } else {
+        page_end = (align_up_saturated(end) - g_mem_base) / PAGE_SIZE;
+        if (page_end > g_total_pages) {
+            page_end = g_total_pages;
+        }
     }
 
     for (uint64_t page = page_start; page < page_end; page++) {

@@ -7,6 +7,9 @@
  * PIDs are non-zero and unique inside the fixed process table. User regions
  * are half-open virtual ranges [start, end); entries with OWNED_PAGES carry
  * PMM-backed pages that process_free_resources/process_release must return.
+ * Region helpers reject zero-length and overflowing ranges, while
+ * process_user_range_contains treats a zero-length query as vacuously valid for
+ * a non-null process.
  */
 
 #include <stdint.h>
