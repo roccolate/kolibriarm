@@ -58,6 +58,34 @@ void test_tmpfs_write_clamps_to_file_capacity(void) {
     TEST_ASSERT_EQUAL_UINT64(0, output[2]);
 }
 
+void test_tmpfs_reused_slot_clears_old_file_bytes(void) {
+    uint8_t old_data[] = { 0xaa, 0xbb, 0xcc };
+    uint8_t new_tail[] = { 0x11 };
+    uint8_t output[3] = { 0xff, 0xff, 0xff };
+    uint64_t count = 99;
+
+    tmpfs_reset();
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)tmpfs_create("old"));
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)tmpfs_write("old", 0, old_data,
+                                                   sizeof(old_data),
+                                                   &count));
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)tmpfs_delete("old"));
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)tmpfs_create("new"));
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)tmpfs_write("new", 2, new_tail,
+                                                   sizeof(new_tail), &count));
+    TEST_ASSERT_EQUAL_UINT64(sizeof(new_tail), count);
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)tmpfs_read("new", 0, output,
+                                                  sizeof(output), &count));
+    TEST_ASSERT_EQUAL_UINT64(sizeof(output), count);
+    TEST_ASSERT_EQUAL_UINT64(0, output[0]);
+    TEST_ASSERT_EQUAL_UINT64(0, output[1]);
+    TEST_ASSERT_EQUAL_UINT64(0x11, output[2]);
+}
+
 void test_tmpfs_rejects_invalid_inputs_and_duplicates(void) {
     uint8_t data[] = { 1 };
     uint8_t output[1] = { 0 };

@@ -4,6 +4,14 @@
 
 #include "kernel/vfs.h"
 
+/*
+ * Minimal FAT32 root-directory support.
+ *
+ * This module intentionally handles only 8.3 names in the root directory. It
+ * backs the /fat VFS mount used by the kernel shell path and keeps all sector
+ * I/O behind caller-supplied callbacks so host tests can use an in-memory disk.
+ */
+
 #define FAT32_ATTR_VOLUME_ID 0x08U
 #define FAT32_ATTR_DIRECTORY 0x10U
 #define FAT32_ATTR_LONG_NAME 0x0fU
@@ -319,7 +327,7 @@ static uint32_t allocate_cluster(fat32_fs_t *fs, uint32_t prev_cluster) {
         if (read_fat_entry(fs, prev_cluster, &prev_value) != 0) {
             return 0;
         }
-        if (cluster_is_eoc(prev_value)) {
+        if (!cluster_is_eoc(prev_value)) {
             return 0;
         }
         if (write_fat_entry(fs, prev_cluster, new_cluster) != 0) {
@@ -335,6 +343,41 @@ static uint32_t allocate_cluster(fat32_fs_t *fs, uint32_t prev_cluster) {
     }
 
     return new_cluster;
+}
+
+static int advance_or_allocate_cluster(fat32_fs_t *fs, fat32_file_t *file,
+                                       uint64_t cluster_size,
+                                       uint32_t *cluster) {
+    uint32_t next;
+
+    if (fs == 0 || file == 0 || cluster == 0 || *cluster < 2U ||
+        read_fat_entry(fs, *cluster, &next) != 0) {
+        return -1;
+    }
+
+    if (cluster_is_eoc(next)) {
+        uint32_t new_cluster;
+
+        if (cluster_size > 0xffffffffULL ||
+            file->capacity > 0xffffffffU - (uint32_t)cluster_size) {
+            return -1;
+        }
+
+        new_cluster = allocate_cluster(fs, *cluster);
+        if (new_cluster == 0) {
+            return -1;
+        }
+        file->capacity += (uint32_t)cluster_size;
+        *cluster = new_cluster;
+        return 0;
+    }
+
+    if (next < 2U) {
+        return -1;
+    }
+
+    *cluster = next;
+    return 0;
 }
 
 /*
@@ -808,15 +851,8 @@ int fat32_write(fat32_fs_t *fs, fat32_file_t *file, uint64_t offset,
 
     while (skip >= cluster_size) {
         skip -= cluster_size;
-        if (cluster_is_eoc(cluster)) {
-            uint32_t next = allocate_cluster(fs, cluster);
-            if (next == 0) {
-                return -1;
-            }
-            cluster = next;
-            file->capacity += (uint32_t)cluster_size;
-        } else if (read_fat_entry(fs, cluster, &cluster) != 0 ||
-                   cluster < 2U) {
+        if (advance_or_allocate_cluster(fs, file, cluster_size,
+                                        &cluster) != 0) {
             return -1;
         }
     }
@@ -824,13 +860,8 @@ int fat32_write(fat32_fs_t *fs, fat32_file_t *file, uint64_t offset,
     while (remaining > 0) {
         uint64_t cluster_offset = skip;
 
-        if (cluster_is_eoc(cluster)) {
-            uint32_t next = allocate_cluster(fs, cluster);
-            if (next == 0) {
-                return -1;
-            }
-            cluster = next;
-            file->capacity += (uint32_t)cluster_size;
+        if (cluster < 2U || cluster_is_eoc(cluster)) {
+            return -1;
         }
 
         for (uint32_t sector = 0;
@@ -876,15 +907,8 @@ int fat32_write(fat32_fs_t *fs, fat32_file_t *file, uint64_t offset,
 
         skip = 0;
         if (remaining > 0) {
-            if (cluster_is_eoc(cluster)) {
-                uint32_t next = allocate_cluster(fs, cluster);
-                if (next == 0) {
-                    return -1;
-                }
-                cluster = next;
-                file->capacity += (uint32_t)cluster_size;
-            } else if (read_fat_entry(fs, cluster, &cluster) != 0 ||
-                       cluster < 2U) {
+            if (advance_or_allocate_cluster(fs, file, cluster_size,
+                                            &cluster) != 0) {
                 return -1;
             }
         }

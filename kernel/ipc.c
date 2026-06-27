@@ -2,6 +2,14 @@
 
 #include <stdint.h>
 
+/*
+ * Fixed-size in-kernel IPC queue.
+ *
+ * Messages are copied into kernel-owned slots at send time and removed on the
+ * first matching receive. Bytes beyond message.size are kept zero so callers
+ * never observe stale payload tails after slot reuse.
+ */
+
 typedef struct {
     ipc_message_t message;
     uint8_t used;
@@ -46,6 +54,9 @@ int ipc_send(uint32_t sender_pid, uint32_t target_pid, const uint8_t *data,
             for (uint32_t j = 0; j < size; j++) {
                 slot->message.data[j] = data[j];
             }
+            for (uint32_t j = size; j < IPC_MAX_MESSAGE_SIZE; j++) {
+                slot->message.data[j] = 0;
+            }
             slot->used = 1;
             return 0;
         }
@@ -66,8 +77,12 @@ int ipc_recv(uint32_t target_pid, ipc_message_t *message) {
             message->sender_pid = slot->message.sender_pid;
             message->target_pid = slot->message.target_pid;
             message->size = slot->message.size;
-            for (uint32_t j = 0; j < IPC_MAX_MESSAGE_SIZE; j++) {
+            for (uint32_t j = 0; j < slot->message.size; j++) {
                 message->data[j] = slot->message.data[j];
+            }
+            for (uint32_t j = slot->message.size; j < IPC_MAX_MESSAGE_SIZE;
+                 j++) {
+                message->data[j] = 0;
             }
             ipc_clear_slot(slot);
             return 0;

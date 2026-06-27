@@ -185,6 +185,13 @@ void test_vfs_rejects_invalid_mounts_and_reads(void) {
         .read = 0,
         .context = &file,
     };
+    char long_path[VFS_MAX_PATH + 1U];
+    vfs_node_t too_long = {
+        .path = long_path,
+        .size = sizeof(data),
+        .read = test_file_read,
+        .context = &file,
+    };
     vfs_node_t duplicates[2] = {
         {
             .path = "/dup",
@@ -200,6 +207,12 @@ void test_vfs_rejects_invalid_mounts_and_reads(void) {
         },
     };
 
+    long_path[0] = '/';
+    for (uint32_t i = 1; i < VFS_MAX_PATH; i++) {
+        long_path[i] = 'x';
+    }
+    long_path[VFS_MAX_PATH] = '\0';
+
     vfs_reset();
     TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
                              (uint64_t)vfs_mount_static(0, 1));
@@ -209,6 +222,8 @@ void test_vfs_rejects_invalid_mounts_and_reads(void) {
                              (uint64_t)vfs_mount_static(&relative, 1));
     TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
                              (uint64_t)vfs_mount_static(&no_reader, 1));
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
+                             (uint64_t)vfs_mount_static(&too_long, 1));
     TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
                              (uint64_t)vfs_mount_static(duplicates, 2));
 

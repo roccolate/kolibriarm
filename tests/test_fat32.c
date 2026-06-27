@@ -517,8 +517,8 @@ void test_fat32_write_grows_chain_when_capacity_exhausted(void) {
     test_fat32_disk_t disk;
     fat32_fs_t fs;
     fat32_file_t file;
-    uint8_t payload[FAT32_SECTOR_SIZE * 2];
-    uint8_t output[FAT32_SECTOR_SIZE * 2];
+    uint8_t payload[FAT32_SECTOR_SIZE * 2U + 1U];
+    uint8_t output[FAT32_SECTOR_SIZE * 2U + 1U];
     uint64_t count = 99;
 
     test_setup_fat32_disk_writable(&disk, &fs);
@@ -528,7 +528,8 @@ void test_fat32_write_grows_chain_when_capacity_exhausted(void) {
 
     /*
      * The HELLO.TXT setup only preallocates two clusters (3, 4).
-     * Writing twice the cluster size forces a brand-new allocation.
+     * Writing one byte beyond that capacity forces a new cluster 5 and
+     * changes cluster 4 from EOC to a real FAT link.
      */
     for (uint32_t i = 0; i < sizeof(payload); i++) {
         payload[i] = (uint8_t)(i & 0xffU);
@@ -539,7 +540,16 @@ void test_fat32_write_grows_chain_when_capacity_exhausted(void) {
                                   &count));
     TEST_ASSERT_EQUAL_UINT64(sizeof(payload), count);
     TEST_ASSERT_EQUAL_UINT64(sizeof(payload), file.size);
-    TEST_ASSERT_EQUAL_UINT64(sizeof(payload), file.capacity);
+    TEST_ASSERT_EQUAL_UINT64(FAT32_SECTOR_SIZE * 3U, file.capacity);
+
+    TEST_ASSERT_EQUAL_UINT64(5U, disk.sectors[1][16]);
+    TEST_ASSERT_EQUAL_UINT64(0U, disk.sectors[1][17]);
+    TEST_ASSERT_EQUAL_UINT64(0U, disk.sectors[1][18]);
+    TEST_ASSERT_EQUAL_UINT64(0U, disk.sectors[1][19]);
+    TEST_ASSERT_EQUAL_UINT64(0xf8U, disk.sectors[1][20]);
+    TEST_ASSERT_EQUAL_UINT64(0xffU, disk.sectors[1][21]);
+    TEST_ASSERT_EQUAL_UINT64(0xffU, disk.sectors[1][22]);
+    TEST_ASSERT_EQUAL_UINT64(0x0fU, disk.sectors[1][23]);
 
     TEST_ASSERT_EQUAL_UINT64(
         0, (uint64_t)fat32_read(&fs, &file, 0, output, sizeof(output),

@@ -3,6 +3,13 @@
 
 #include <stdint.h>
 
+/*
+ * Descriptor for an app image embedded in the kernel bootfs image.
+ *
+ * The returned image starts at a KLI1 header and spans exactly the linked
+ * blob range. boot_program_find returns a stable pointer for each registered
+ * program; callers may keep it across later lookups.
+ */
 typedef struct {
     const char *name;
     const uint8_t *image;

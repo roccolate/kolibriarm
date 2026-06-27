@@ -7,6 +7,14 @@
 #define TMPFS_MAX_FILE_SIZE 256U
 #define TMPFS_MAX_NAME 32U
 
+/*
+ * Fixed-size in-memory filesystem used during kernel boot.
+ *
+ * File names are copied into tmpfs-owned storage and file contents live in a
+ * per-slot static byte array. There is no dynamic allocation and writes clamp
+ * at TMPFS_MAX_FILE_SIZE.
+ */
+
 typedef struct {
     uint64_t size;
 } tmpfs_stat_t;

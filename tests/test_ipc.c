@@ -39,6 +39,37 @@ void test_ipc_keeps_messages_by_target_pid(void) {
     TEST_ASSERT_EQUAL_UINT64('a', message.data[0]);
 }
 
+void test_ipc_recv_zeroes_unused_payload_tail(void) {
+    uint8_t full[IPC_MAX_MESSAGE_SIZE];
+    const uint8_t short_payload[] = { 0x7e };
+    ipc_message_t message;
+
+    for (uint32_t i = 0; i < sizeof(full); i++) {
+        full[i] = 0xffU;
+        message.data[i] = 0xaaU;
+    }
+
+    ipc_init();
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)ipc_send(1, 2, full, sizeof(full)));
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)ipc_recv(2, &message));
+    TEST_ASSERT_EQUAL_UINT64(sizeof(full), message.size);
+
+    for (uint32_t i = 0; i < sizeof(message.data); i++) {
+        message.data[i] = 0xaaU;
+    }
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)ipc_send(1, 2, short_payload,
+                                                sizeof(short_payload)));
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)ipc_recv(2, &message));
+    TEST_ASSERT_EQUAL_UINT64(sizeof(short_payload), message.size);
+    TEST_ASSERT_EQUAL_UINT64(0x7eU, message.data[0]);
+    for (uint32_t i = 1; i < IPC_MAX_MESSAGE_SIZE; i++) {
+        TEST_ASSERT_EQUAL_UINT64(0, message.data[i]);
+    }
+}
+
 void test_ipc_rejects_invalid_inputs_and_full_queue(void) {
     uint8_t payload[IPC_MAX_MESSAGE_SIZE + 1U];
     ipc_message_t message;

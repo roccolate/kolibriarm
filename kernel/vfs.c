@@ -4,6 +4,14 @@
 
 #include "kernel/fat32.h"
 
+/*
+ * Small in-kernel virtual filesystem.
+ *
+ * VFS owns the path table, open-file offsets, and mounted list callbacks. It
+ * does not allocate memory or own file contents; mounted filesystems keep
+ * their backing storage and expose read/write/stat/list operations here.
+ */
+
 static vfs_node_t g_vfs_nodes[VFS_MAX_NODES];
 static char g_vfs_paths[VFS_MAX_NODES][VFS_MAX_PATH];
 static uint32_t g_vfs_node_count;
@@ -51,6 +59,23 @@ static int vfs_path_equals(const char *left, const char *right) {
     }
 
     return *left == *right;
+}
+
+static int vfs_path_is_mountable(const char *path) {
+    uint32_t i = 0;
+
+    if (path == 0 || path[0] != '/') {
+        return 0;
+    }
+
+    while (path[i] != '\0') {
+        if (i + 1U >= VFS_MAX_PATH) {
+            return 0;
+        }
+        i++;
+    }
+
+    return 1;
 }
 
 static int vfs_copy_path(char dest[VFS_MAX_PATH], const char *path) {
@@ -130,9 +155,8 @@ int vfs_mount_static(const vfs_node_t *nodes, uint32_t count) {
     for (uint32_t i = 0; i < count; i++) {
         const vfs_node_t *node = &nodes[i];
 
-        if (node->path == 0 || node->path[0] != '/' ||
+        if (!vfs_path_is_mountable(node->path) ||
             (node->read == 0 && node->write == 0) ||
-            vfs_copy_path(g_vfs_paths[g_vfs_node_count], node->path) != 0 ||
             vfs_find(node->path) != 0) {
             return -1;
         }

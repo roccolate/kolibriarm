@@ -4,6 +4,14 @@
 
 #include "kernel/vfs.h"
 
+/*
+ * Tiny fixed-table temporary filesystem.
+ *
+ * tmpfs is used for early boot scratch files and VFS smoke checks. It owns all
+ * file bytes in static storage, so reused file slots must be cleared before a
+ * new name can observe them.
+ */
+
 typedef struct {
     char name[TMPFS_MAX_NAME];
     uint8_t data[TMPFS_MAX_FILE_SIZE];
@@ -15,6 +23,21 @@ static tmpfs_file_t g_tmpfs_files[TMPFS_MAX_FILES];
 static vfs_node_t g_tmpfs_vfs_nodes[TMPFS_MAX_FILES];
 static char g_tmpfs_vfs_names[TMPFS_MAX_FILES][TMPFS_MAX_NAME];
 static uint32_t g_tmpfs_vfs_node_count;
+
+static void tmpfs_clear_file(tmpfs_file_t *file) {
+    if (file == 0) {
+        return;
+    }
+
+    for (uint32_t i = 0; i < TMPFS_MAX_NAME; i++) {
+        file->name[i] = '\0';
+    }
+    for (uint32_t i = 0; i < TMPFS_MAX_FILE_SIZE; i++) {
+        file->data[i] = 0;
+    }
+    file->size = 0;
+    file->used = 0;
+}
 
 static int tmpfs_name_equals(const char *left, const char *right) {
     if (left == 0 || right == 0) {
@@ -93,8 +116,7 @@ static int tmpfs_vfs_stat(void *context, vfs_stat_t *stat) {
 
 void tmpfs_reset(void) {
     for (uint32_t i = 0; i < TMPFS_MAX_FILES; i++) {
-        g_tmpfs_files[i].size = 0;
-        g_tmpfs_files[i].used = 0;
+        tmpfs_clear_file(&g_tmpfs_files[i]);
         g_tmpfs_vfs_nodes[i].path = 0;
         g_tmpfs_vfs_nodes[i].size = 0;
         g_tmpfs_vfs_nodes[i].read = 0;
@@ -102,11 +124,7 @@ void tmpfs_reset(void) {
         g_tmpfs_vfs_nodes[i].stat = 0;
         g_tmpfs_vfs_nodes[i].context = 0;
         for (uint32_t j = 0; j < TMPFS_MAX_NAME; j++) {
-            g_tmpfs_files[i].name[j] = '\0';
             g_tmpfs_vfs_names[i][j] = '\0';
-        }
-        for (uint32_t j = 0; j < TMPFS_MAX_FILE_SIZE; j++) {
-            g_tmpfs_files[i].data[j] = 0;
         }
     }
     g_tmpfs_vfs_node_count = 0;
@@ -119,6 +137,7 @@ int tmpfs_create(const char *name) {
 
     for (uint32_t i = 0; i < TMPFS_MAX_FILES; i++) {
         if (g_tmpfs_files[i].used == 0) {
+            tmpfs_clear_file(&g_tmpfs_files[i]);
             if (tmpfs_copy_name(g_tmpfs_files[i].name, name) != 0) {
                 return -1;
             }
@@ -138,11 +157,7 @@ int tmpfs_delete(const char *name) {
         return -1;
     }
 
-    for (uint32_t i = 0; i < TMPFS_MAX_NAME; i++) {
-        file->name[i] = '\0';
-    }
-    file->size = 0;
-    file->used = 0;
+    tmpfs_clear_file(file);
     return 0;
 }
 

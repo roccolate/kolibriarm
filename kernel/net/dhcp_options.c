@@ -2,6 +2,14 @@
 
 #include <stddef.h>
 
+/*
+ * Pure DHCP option parser.
+ *
+ * The network driver feeds this helper the fixed DHCP options area from a
+ * packet. It extracts only the options KolibriARM currently consumes and
+ * rejects truncated TLVs so packet handling never walks beyond the buffer.
+ */
+
 #define DHCP_OPTION_PAD         0U
 #define DHCP_OPTION_SUBNET      1U
 #define DHCP_OPTION_ROUTER      3U

@@ -11,6 +11,15 @@
 #define VFS_O_WRONLY 1U
 #define VFS_O_RDWR   2U
 
+/*
+ * Fixed-table kernel VFS facade.
+ *
+ * Paths are absolute, copied into VFS-owned storage at mount time, and capped
+ * by VFS_MAX_PATH. File descriptors are process-global kernel descriptors used
+ * by the syscall layer; this VFS intentionally does not allocate or normalize
+ * paths.
+ */
+
 typedef struct {
     uint64_t size;
 } vfs_stat_t;

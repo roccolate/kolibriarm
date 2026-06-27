@@ -3,6 +3,13 @@
 
 #include <stdint.h>
 
+/*
+ * Read-only boot filesystem file descriptor.
+ *
+ * `data` points directly at the embedded KLI1 app blob in the kernel image.
+ * bootfs_find returns a stable pointer per registered app, so later lookups do
+ * not invalidate an earlier descriptor.
+ */
 typedef struct {
     const char *name;
     const uint8_t *data;

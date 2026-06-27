@@ -118,15 +118,15 @@ void test_panel_boot_recovery_wrapper_stops_after_budget(void) {
     TEST_ASSERT_EQUAL_UINT64(PANEL_BOOT_RECOVERY_MAX_ATTEMPTS,
                              (uint64_t)test_panel_boot_recovery_call_count());
     TEST_ASSERT_EQUAL_UINT64(sentinel, exit_code);
-    TEST_ASSERT_TRUE(test_panel_boot_recovery_log_count() >=
-                     PANEL_BOOT_RECOVERY_MAX_ATTEMPTS);
+    TEST_ASSERT_EQUAL_UINT64(PANEL_BOOT_RECOVERY_MAX_ATTEMPTS * 2U + 1U,
+                             (uint64_t)test_panel_boot_recovery_log_count());
 }
 
 void test_panel_boot_recovery_wrapper_propagates_last_exit_code(void) {
     /*
      * Whatever the final panel_boot_run returns, the wrapper must
      * surface it back to the caller. This keeps kernel_main's
-     * "USER demo exit code: ..." line meaningful even after a
+     * "USER exit code: ..." line meaningful even after a
      * recovery loop, instead of masking the real cause behind the
      * wrapper's bookkeeping value.
      */

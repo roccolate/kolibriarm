@@ -33,7 +33,8 @@
 
 #define PANEL_BOOT_APP "panel"
 
-extern uint64_t user_enter_el0(uint64_t entry, uint64_t stack_top, uint64_t pstate);
+extern uint64_t user_enter_el0(uint64_t entry, uint64_t stack_top,
+                               uint64_t pstate);
 extern char user_enter_el0_return[];
 
 typedef struct {
@@ -138,13 +139,19 @@ static int create_panel_page_table(process_t *process,
                                    uint64_t memory_base,
                                    uint64_t memory_size,
                                    panel_map_mmio_fn_t map_mmio) {
-    uint64_t *pgd = vmm_new_table();
+    uint64_t *pgd;
 
-    if (process == 0 || image == 0 || pgd == 0) {
+    if (process == 0 || image == 0) {
+        return -1;
+    }
+
+    pgd = vmm_new_table();
+    if (pgd == 0) {
         return -1;
     }
 
     if (map_kernel_identity(pgd, memory_base, memory_size, map_mmio) != 0) {
+        vmm_free_table(pgd);
         return -1;
     }
 
@@ -202,6 +209,12 @@ static int init_panel_process(process_t *process, const user_image_t *image,
         return -1;
     }
     storage->image_paddr = 0;
+    /*
+     * Keep stack_paddr in storage after ownership transfer: sys_spawn_argv
+     * still needs the kernel-accessible stack backing to pack argv before the
+     * new process first runs. If argv packing fails, process_release owns the
+     * cleanup path through PROCESS_USER_REGION_OWNED_PAGES.
+     */
     if (process_set_user_region_mapping(
             process, stack_vaddr, KERNEL_USER_STACK_SIZE, storage->stack_paddr,
             PROCESS_USER_REGION_OWNED_PAGES) != 0) {

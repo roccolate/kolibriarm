@@ -2,6 +2,14 @@
 
 #include <stdint.h>
 
+/*
+ * Pure argv stack packer for the EL0 launch path.
+ *
+ * The syscall layer validates the argv pointer array itself. This helper owns
+ * the stack layout: argv pointers first, copied NUL-terminated strings after
+ * them, a NULL sentinel at argv[argc], and a 16-byte-aligned returned argv/SP.
+ */
+
 static void store_u64(uint8_t *dst, uint64_t value) {
     for (uint32_t i = 0; i < sizeof(uint64_t); i++) {
         dst[i] = (uint8_t)(value >> (i * 8U));

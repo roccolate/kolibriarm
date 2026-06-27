@@ -2,6 +2,15 @@
 
 #include <stdint.h>
 
+/*
+ * Embedded boot-program registry.
+ *
+ * The linker script places each KLI1 app blob in its own .app_* section and
+ * exports start/end symbols for this registry. bootfs is a thin VFS-facing
+ * wrapper over these entries; the panel loader eventually consumes the same
+ * bytes through user_image_load_bootfs_flat.
+ */
+
 extern char __app_shell_start[];
 extern char __app_shell_end[];
 extern char __app_editor_start[];
@@ -18,6 +27,9 @@ typedef struct {
     const uint8_t *image_start;
     const uint8_t *image_end;
 } boot_program_source_t;
+
+#define BOOT_PROGRAM_COUNT \
+    (sizeof(g_boot_programs) / sizeof(g_boot_programs[0]))
 
 static const boot_program_source_t g_boot_programs[] = {
     {
@@ -47,7 +59,8 @@ static const boot_program_source_t g_boot_programs[] = {
     },
 };
 
-static boot_program_t g_found_program;
+static boot_program_t g_found_programs[
+    sizeof(g_boot_programs) / sizeof(g_boot_programs[0])];
 
 static int boot_program_name_equals(const char *left, const char *right) {
     if (left == 0 || right == 0) {
@@ -70,18 +83,19 @@ const boot_program_t *boot_program_find(const char *name) {
         return 0;
     }
 
-    for (uint32_t i = 0; i < sizeof(g_boot_programs) / sizeof(g_boot_programs[0]);
-         i++) {
+    for (uint32_t i = 0; i < BOOT_PROGRAM_COUNT; i++) {
         const boot_program_source_t *program = &g_boot_programs[i];
-        uint64_t size = (uint64_t)((uintptr_t)program->image_end -
-                                   (uintptr_t)program->image_start);
+        uintptr_t start = (uintptr_t)program->image_start;
+        uintptr_t end = (uintptr_t)program->image_end;
 
-        if (program->image_start != 0 && size != 0 &&
+        if (start != 0 && end > start &&
             boot_program_name_equals(program->name, name)) {
-            g_found_program.name = program->name;
-            g_found_program.image = program->image_start;
-            g_found_program.size = size;
-            return &g_found_program;
+            boot_program_t *found = &g_found_programs[i];
+
+            found->name = program->name;
+            found->image = program->image_start;
+            found->size = (uint64_t)(end - start);
+            return found;
         }
     }
 

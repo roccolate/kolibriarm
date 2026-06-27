@@ -41,11 +41,6 @@ void test_bootfs_finds_editor_and_panel_for_taskbar_spawn(void) {
      * silently does nothing on click. The bootfs_find result feeds the
      * user_image loader directly, so we also assert the editor's
      * bootfs data pointer matches the linked-in assembly blob.
-     *
-     * bootfs_find returns a pointer into a file-scope static buffer
-     * (g_found_file), so every call overwrites the previous result.
-     * Snapshot each lookup's fields into locals before doing the next
-     * call, otherwise the editor assertions see the panel data.
      */
     const bootfs_file_t *editor_file;
     const uint8_t *editor_data;
@@ -238,4 +233,24 @@ void test_bootfs_old_user_demo_path_is_gone(void) {
     vfs_reset();
     TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)bootfs_mount_vfs());
     TEST_ASSERT_NULL(vfs_find("/boot/user_demo"));
+}
+
+void test_bootfs_find_results_survive_later_lookups(void) {
+    const bootfs_file_t *editor = bootfs_find("editor");
+    const uint8_t *editor_data;
+    uint64_t editor_size;
+
+    TEST_ASSERT_NOT_NULL(editor);
+    editor_data = editor->data;
+    editor_size = editor->size;
+
+    TEST_ASSERT_NOT_NULL(bootfs_find("panel"));
+    TEST_ASSERT_NOT_NULL(bootfs_find("clock"));
+
+    TEST_ASSERT_EQUAL_UINT64('e', editor->name[0]);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(uintptr_t)__app_editor_start,
+                             (uint64_t)(uintptr_t)editor->data);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(uintptr_t)editor_data,
+                             (uint64_t)(uintptr_t)editor->data);
+    TEST_ASSERT_EQUAL_UINT64(editor_size, editor->size);
 }

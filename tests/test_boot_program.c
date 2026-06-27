@@ -183,3 +183,23 @@ void test_boot_program_editor_image_size_matches_assembly_blob(void) {
         (uint64_t)((uintptr_t)__app_editor_end - (uintptr_t)__app_editor_start),
         editor->size);
 }
+
+void test_boot_program_find_results_survive_later_lookups(void) {
+    const boot_program_t *editor = boot_program_find("editor");
+    const uint8_t *editor_image;
+    uint64_t editor_size;
+
+    TEST_ASSERT_NOT_NULL(editor);
+    editor_image = editor->image;
+    editor_size = editor->size;
+
+    TEST_ASSERT_NOT_NULL(boot_program_find("panel"));
+    TEST_ASSERT_NOT_NULL(boot_program_find("clock"));
+
+    TEST_ASSERT_EQUAL_UINT64('e', editor->name[0]);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(uintptr_t)__app_editor_start,
+                             (uint64_t)(uintptr_t)editor->image);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(uintptr_t)editor_image,
+                             (uint64_t)(uintptr_t)editor->image);
+    TEST_ASSERT_EQUAL_UINT64(editor_size, editor->size);
+}

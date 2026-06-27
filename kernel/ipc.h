@@ -6,6 +6,14 @@
 #define IPC_MAX_MESSAGES 8U
 #define IPC_MAX_MESSAGE_SIZE 16U
 
+/*
+ * Small process-to-process message ABI.
+ *
+ * The kernel queue stores fixed-size payload buffers, but only the first
+ * `size` bytes are meaningful. ipc_recv zeroes the remaining data bytes so
+ * receivers can safely inspect the full struct in tests and diagnostics.
+ */
+
 typedef struct {
     uint32_t sender_pid;
     uint32_t target_pid;

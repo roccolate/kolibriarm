@@ -2,13 +2,19 @@
 
 #include <stddef.h>
 
+/*
+ * Panel recovery policy.
+ *
+ * The recovery wrapper is intentionally callback-based: kernel_main owns board
+ * context and logging, while this file owns only the retry budget. Today every
+ * panel exit is retried until the fixed budget is exhausted because the ABI has
+ * no explicit "desktop shutdown requested" signal yet.
+ */
+
 panel_boot_recovery_action_t panel_boot_recovery_decide(uint32_t attempts_used,
-                                                       uint64_t last_exit_code) {
+                                                        uint64_t last_exit_code) {
     (void)last_exit_code;
 
-    if (attempts_used == 0) {
-        return PANEL_BOOT_RECOVERY_CONTINUE;
-    }
     if (attempts_used >= PANEL_BOOT_RECOVERY_MAX_ATTEMPTS) {
         return PANEL_BOOT_RECOVERY_STOP_EXHAUSTED;
     }

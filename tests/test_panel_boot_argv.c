@@ -137,3 +137,29 @@ void test_panel_boot_argv_zero_argc_returns_null_argv(void) {
             stack, TEST_STACK_BASE, TEST_STACK_SIZE, 0, 0, &argv_vaddr));
     TEST_ASSERT_EQUAL_UINT64(0, argv_vaddr);
 }
+
+void test_panel_boot_argv_rejects_invalid_stack_inputs(void) {
+    uint8_t stack[TEST_STACK_SIZE] __attribute__((aligned(16)));
+    const char arg[] = "shell";
+    uint64_t argv[1];
+    uint64_t argv_vaddr = 0xfeedfaceULL;
+
+    argv[0] = (uint64_t)(uintptr_t)arg;
+
+    TEST_ASSERT_EQUAL_UINT64(
+        (uint64_t)-1,
+        (uint64_t)panel_boot_place_argv_on_stack(
+            0, TEST_STACK_BASE, TEST_STACK_SIZE, argv, 1, &argv_vaddr));
+    TEST_ASSERT_EQUAL_UINT64(0xfeedfaceULL, argv_vaddr);
+
+    TEST_ASSERT_EQUAL_UINT64(
+        (uint64_t)-1,
+        (uint64_t)panel_boot_place_argv_on_stack(
+            stack, TEST_STACK_BASE, TEST_STACK_SIZE, argv, 1, 0));
+
+    TEST_ASSERT_EQUAL_UINT64(
+        (uint64_t)-1,
+        (uint64_t)panel_boot_place_argv_on_stack(
+            stack, TEST_STACK_BASE, 8, argv, 1, &argv_vaddr));
+    TEST_ASSERT_EQUAL_UINT64(0xfeedfaceULL, argv_vaddr);
+}

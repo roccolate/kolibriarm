@@ -25,10 +25,11 @@ static virtio_net_device_t g_net_dev;
 static uint8_t g_net_inited = 0;
 static uint32_t g_dhcp_xid = 0x12345678;
 
-static void memcpy32(void *dst, const void *src, uint32_t len) {
-    uint32_t *d = (uint32_t *)dst;
-    const uint32_t *s = (const uint32_t *)src;
-    for (uint32_t i = 0; i < (len + 3) / 4; i++) {
+static void copy_bytes(void *dst, const void *src, uint32_t len) {
+    uint8_t *d = (uint8_t *)dst;
+    const uint8_t *s = (const uint8_t *)src;
+
+    for (uint32_t i = 0; i < len; i++) {
         d[i] = s[i];
     }
 }
@@ -84,13 +85,13 @@ static uint16_t checksum(void *data, uint32_t len) {
 
 static void print_ip(uint32_t ip) {
     uart_puts("IP=");
-    uart_putc('0' + ((ip >> 0) & 0xFF));
+    print_dec64((ip >> 0) & 0xFF);
     uart_putc('.');
-    uart_putc('0' + ((ip >> 8) & 0xFF));
+    print_dec64((ip >> 8) & 0xFF);
     uart_putc('.');
-    uart_putc('0' + ((ip >> 16) & 0xFF));
+    print_dec64((ip >> 16) & 0xFF);
     uart_putc('.');
-    uart_putc('0' + ((ip >> 24) & 0xFF));
+    print_dec64((ip >> 24) & 0xFF);
 }
 
 static int send_eth_frame(const void *data, uint32_t len, uint16_t eth_type) {
@@ -102,13 +103,13 @@ static int send_eth_frame(const void *data, uint32_t len, uint16_t eth_type) {
         return -1;
     }
 
-    memcpy32(frame, broadcast, 6);
-    memcpy32(frame + 6, src_mac, 6);
+    copy_bytes(frame, broadcast, 6);
+    copy_bytes(frame + 6, src_mac, 6);
 
     frame[12] = (eth_type >> 8) & 0xFF;
     frame[13] = eth_type & 0xFF;
 
-    memcpy32(frame + 14, data, len);
+    copy_bytes(frame + 14, data, len);
 
     return virtio_net_send(&g_net_dev, frame, len + 14);
 }
@@ -138,15 +139,15 @@ static int send_ip_packet(const void *data, uint32_t len,
     packet[8] = 64;
     packet[9] = proto;
     *(uint16_t *)&packet[10] = 0;
-    memcpy32(&packet[12], src_ip, 4);
+    copy_bytes(&packet[12], src_ip, 4);
     if (dest_ip == 0) {
-        memcpy32(&packet[16], broadcast, 4);
+        copy_bytes(&packet[16], broadcast, 4);
     } else {
         set_ip_addr(&packet[16], dest_ip);
     }
     *(uint16_t *)&packet[10] = checksum(packet, 20);
 
-    memcpy32(packet + 20, data, len);
+    copy_bytes(packet + 20, data, len);
 
     return send_eth_frame(packet, len + 20, ETH_TYPE_IP);
 }
@@ -170,8 +171,8 @@ static int send_udp_packet(const void *data, uint32_t len,
     udp_header[6] = 0;
     udp_header[7] = 0;
 
-    memcpy32(packet, udp_header, 8);
-    memcpy32(packet + 8, data, len);
+    copy_bytes(packet, udp_header, 8);
+    copy_bytes(packet + 8, data, len);
 
     return send_ip_packet(packet, len + 8, dest_ip, IP_PROTO_UDP);
 }
@@ -187,9 +188,9 @@ static void send_dhcp_discover(void) {
     pkt.xid = g_dhcp_xid;
     pkt.flags = 0x8000;
 
-    memcpy32(pkt.chaddr, g_net_dev.mac, 6);
+    copy_bytes(pkt.chaddr, g_net_dev.mac, 6);
 
-    memcpy32(pkt.options, options, 4);
+    copy_bytes(pkt.options, options, 4);
     pkt.options[4] = 53;
     pkt.options[5] = 1;
     pkt.options[6] = DHCP_DISCOVER;
@@ -212,9 +213,9 @@ static void send_dhcp_request(uint32_t server_ip, uint32_t requested_ip) {
     pkt.flags = 0x8000;
 
     set_ip_addr(pkt.ciaddr, requested_ip);
-    memcpy32(pkt.chaddr, g_net_dev.mac, 6);
+    copy_bytes(pkt.chaddr, g_net_dev.mac, 6);
 
-    memcpy32(pkt.options, options, 4);
+    copy_bytes(pkt.options, options, 4);
 
     pkt.options[opt_idx++] = 53;
     pkt.options[opt_idx++] = 1;
@@ -309,6 +310,7 @@ static void parse_udp_packet(uint8_t *data, uint32_t len) {
 
 static void parse_ip_packet(uint8_t *data, uint32_t len) {
     uint8_t proto;
+    uint32_t header_len;
 
     if (len < 20) {
         return;
@@ -318,10 +320,15 @@ static void parse_ip_packet(uint8_t *data, uint32_t len) {
         return;
     }
 
+    header_len = (uint32_t)(data[0] & 0x0fU) * 4U;
+    if (header_len < 20U || header_len > len) {
+        return;
+    }
+
     proto = data[9];
 
     if (proto == IP_PROTO_UDP) {
-        parse_udp_packet(data + 20, len - 20);
+        parse_udp_packet(data + header_len, len - header_len);
     }
 }
 
@@ -378,7 +385,7 @@ int net_init(void) {
     g_net_info.subnet = 0;
     g_net_info.gateway = 0;
     g_net_info.dns = 0;
-    memcpy32(g_net_info.mac, net_info.mac, 6);
+    copy_bytes(g_net_info.mac, net_info.mac, 6);
 
     g_net_inited = 1;
 

@@ -5,6 +5,15 @@
 
 #define FAT32_SECTOR_SIZE 512U
 
+/*
+ * FAT32 root-directory facade.
+ *
+ * The implementation supports 512-byte sectors, short 8.3 names, root
+ * directory files, and a small VFS bridge. Sector ownership stays with the
+ * caller through read/write callbacks so the same code runs in kernel boot and
+ * host tests.
+ */
+
 typedef int (*fat32_read_sector_fn_t)(void *context, uint32_t lba,
                                       uint8_t *buffer);
 typedef int (*fat32_write_sector_fn_t)(void *context, uint32_t lba,
