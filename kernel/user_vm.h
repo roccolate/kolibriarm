@@ -5,6 +5,14 @@
 
 #include "kernel/process.h"
 
+/*
+ * User VM API shared by sys_mmap/sys_munmap and the panel loader.
+ *
+ * flags=0 maps anonymous memory as readable/writable. Non-zero flags must be
+ * a combination of USER_VM_PROT_* bits; MAP_SHARED and MAP_FIXED are reserved
+ * at the syscall ABI level but intentionally rejected here until implemented.
+ */
+
 #define USER_VM_PROT_READ  0x01ULL
 #define USER_VM_PROT_WRITE 0x02ULL
 #define USER_VM_PROT_EXEC  0x04ULL

@@ -18,6 +18,10 @@ void test_user_image_entry_uses_base_plus_offset(void) {
 
     image.entry_offset = image.size;
     TEST_ASSERT_EQUAL_UINT64(0, user_image_entry(&image));
+    image.base = UINT64_MAX - 0x10ULL;
+    image.size = 0x100ULL;
+    image.entry_offset = 0x20ULL;
+    TEST_ASSERT_EQUAL_UINT64(0, user_image_entry(&image));
     TEST_ASSERT_EQUAL_UINT64(0, user_image_entry(0));
 }
 
@@ -149,6 +153,10 @@ void test_user_image_prepare_process_rejects_invalid_inputs(void) {
     TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
                              (uint64_t)user_image_prepare_process(
                                  &process, &image, 0, 0x1000ULL, 0x340ULL));
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
+                             (uint64_t)user_image_prepare_process(
+                                 &process, &image, UINT64_MAX - 0x7ffULL,
+                                 0x1000ULL, 0x340ULL));
 
     process_init(&overlap, 14, "overlap");
     image.entry_offset = 0;

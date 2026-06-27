@@ -4,6 +4,16 @@
 
 #include "kernel/mm/pmm.h"
 
+/*
+ * Minimal AArch64 stage-1 page-table manager.
+ *
+ * The kernel uses one page-table hierarchy per user process. Mapping a single
+ * user page can allocate up to three child tables below the root, so process
+ * teardown must release the hierarchy with vmm_free_table rather than freeing
+ * only the root PGD page. Leaf mappings remain owned by their caller; the VMM
+ * owns only page-table pages.
+ */
+
 #define TABLE_ENTRIES       512ULL
 #define TABLE_INDEX_MASK    0x1ffULL
 #define DESC_VALID          (1ULL << 0)
@@ -48,6 +58,30 @@ uint64_t *vmm_new_table(void) {
     zero_table(table);
 
     return table;
+}
+
+static void free_table_level(uint64_t *table, uint32_t level) {
+    if (table == 0) {
+        return;
+    }
+
+    if (level < 3U) {
+        for (uint64_t i = 0; i < TABLE_ENTRIES; i++) {
+            uint64_t entry = table[i];
+
+            if ((entry & DESC_VALID) != 0 && (entry & DESC_TABLE) != 0) {
+                free_table_level((uint64_t *)(uintptr_t)(entry &
+                                                         DESC_ADDR_MASK),
+                                 level + 1U);
+            }
+        }
+    }
+
+    pmm_free_page((uint64_t)(uintptr_t)table);
+}
+
+void vmm_free_table(uint64_t *pgd) {
+    free_table_level(pgd, 0);
 }
 
 static uint64_t *next_table(uint64_t *table, uint64_t index) {

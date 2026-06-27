@@ -8,6 +8,7 @@ void test_vmm_map_translate_unmap_page(void);
 void test_vmm_map_range_and_unmap_range(void);
 void test_vmm_user_exec_mapping_flags(void);
 void test_vmm_kernel_mapping_can_be_replaced_with_user_mapping(void);
+void test_vmm_free_table_releases_tables_not_leaf_pages(void);
 void test_process_user_range_contains_registered_regions(void);
 void test_process_remove_user_region_exact_match(void);
 void test_process_user_region_mapping_metadata_round_trips(void);
@@ -310,6 +311,7 @@ int main(void) {
     RUN_TEST(test_vmm_map_range_and_unmap_range);
     RUN_TEST(test_vmm_user_exec_mapping_flags);
     RUN_TEST(test_vmm_kernel_mapping_can_be_replaced_with_user_mapping);
+    RUN_TEST(test_vmm_free_table_releases_tables_not_leaf_pages);
     RUN_TEST(test_process_user_range_contains_registered_regions);
     RUN_TEST(test_process_remove_user_region_exact_match);
     RUN_TEST(test_process_user_region_mapping_metadata_round_trips);

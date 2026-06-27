@@ -100,6 +100,9 @@ void test_user_vm_rejects_invalid_inputs_without_regions(void) {
     TEST_ASSERT_EQUAL_UINT64((uint64_t)USER_VM_ERR_INVAL,
                              (uint64_t)user_vm_map_anonymous(
                                  &process, 0, 0, 0));
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)USER_VM_ERR_INVAL,
+                             (uint64_t)user_vm_map_anonymous(
+                                 &process, 0, UINT64_MAX, 0));
     TEST_ASSERT_EQUAL_UINT64(0, process.user_region_count);
 
     TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)process_add_user_region(

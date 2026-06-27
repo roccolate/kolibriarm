@@ -5,6 +5,16 @@
 #include "kernel/mm/pmm.h"
 #include "kernel/mm/vmm.h"
 
+/*
+ * User virtual-memory mapping helpers.
+ *
+ * The syscall layer uses this file for anonymous mmap/munmap. The panel
+ * loader also uses user_vm_map_physical for fixed image and stack regions
+ * that were registered on the process before mapping. Anonymous mappings are
+ * process-owned and must carry PROCESS_USER_REGION_OWNED_PAGES so
+ * process_release can return their PMM pages.
+ */
+
 #define USER_VM_SUPPORTED_FLAGS \
     (USER_VM_PROT_READ | USER_VM_PROT_WRITE | USER_VM_PROT_EXEC)
 
@@ -27,6 +37,7 @@ static int flags_to_vmm(uint64_t flags, uint64_t *vmm_flags) {
         flags = USER_VM_PROT_READ | USER_VM_PROT_WRITE;
     }
 
+    /* AArch64 stage-1 page permissions do not provide a write-only user page. */
     if ((flags & USER_VM_PROT_WRITE) != 0) {
         result |= VMM_FLAG_READ | VMM_FLAG_WRITE;
     } else if ((flags & USER_VM_PROT_READ) != 0) {

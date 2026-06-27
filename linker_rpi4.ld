@@ -65,4 +65,15 @@ SECTIONS {
     . += 0x4000;
     __stack_top = .;
     __kernel_end = .;
+
+    /*
+     * The kernel has no unwinder or hosted runtime. Keep compiler/linker
+     * metadata out of the loadable binary so the size limit tracks executable
+     * code, embedded apps, and real read-only data only.
+     */
+    /DISCARD/ : {
+        *(.eh_frame*)
+        *(.note*)
+        *(.comment)
+    }
 }

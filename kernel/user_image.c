@@ -6,9 +6,21 @@
 #include "kernel/user_image_format.h"
 #include "kernel/vfs.h"
 
+/*
+ * KLI1 user-image loader.
+ *
+ * The loader copies exactly the byte range declared by the image header into
+ * the process image slot. It does not synthesize BSS and it does not chase ELF
+ * metadata; builders must place every byte the app needs inside the KLI1 flat
+ * image and set image_size to that full range. user_image_prepare_process only
+ * installs process metadata and entry state; the caller owns the actual VM
+ * mappings through user_vm_map_physical.
+ */
+
 uint64_t user_image_entry(const user_image_t *image) {
     if (image == 0 || image->base == 0 || image->size == 0 ||
-        image->entry_offset >= image->size) {
+        image->entry_offset >= image->size ||
+        image->base > UINT64_MAX - image->entry_offset) {
         return 0;
     }
 
@@ -78,6 +90,10 @@ int user_image_load_flat(user_image_t *image, const char *name,
     }
 
     if (entry_offset < header_size || entry_offset >= image_size) {
+        return -1;
+    }
+
+    if (source_base > UINT64_MAX - entry_offset) {
         return -1;
     }
 

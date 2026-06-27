@@ -216,8 +216,8 @@ Current limitations:
 
 | Code | Name | Meaning |
 |------|------|---------|
+| -2 | `USER_VM_ERR_NOMEM` | Out of memory |
 | -3 | `ERR_NOENT` | File or resource not found |
-| -2 | `ERR_NOMEM` | Out of memory |
 | -5 | `ERR_BADF` | Bad file descriptor |
 | -7 | `ERR_INVAL` | Invalid argument |
 | -11 | `ERR_AGAIN` | Try again later |

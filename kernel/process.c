@@ -1,3 +1,13 @@
+/*
+ * Process table, trap-frame state, and user-region ownership.
+ *
+ * This module is the kernel's process-control block owner. It tracks the
+ * fixed process table, current process pointer, saved EL0 context, user
+ * virtual-memory regions, and the physical pages each process must return
+ * when it exits. Syscall code treats process_user_range_contains as the
+ * user-pointer authority, so range arithmetic here must stay overflow-safe.
+ */
+
 #include "kernel/process.h"
 
 #include <stdint.h>
@@ -7,6 +17,8 @@
 #include "kernel/mm/vmm.h"
 
 #define USER_REGION_ALIGN 4096ULL
+_Static_assert((USER_REGION_ALIGN & (USER_REGION_ALIGN - 1ULL)) == 0,
+               "user-region alignment must be a power of two");
 
 static process_t g_processes[PROCESS_MAX_PROCESSES];
 static process_t *g_current_process;
@@ -57,7 +69,7 @@ static void region_clear(process_user_region_t *region) {
 
 /*
  * Free every physical page the process owns: each anonymous-mapped
- * region's pages plus the page-table page itself. Called from
+ * region's pages plus the page-table hierarchy itself. Called from
  * process_release so a slot, once reclaimed, returns all of its
  * PMM budget to the allocator. Safe to call multiple times:
  * PROCESS_USER_REGION_OWNED_PAGES is cleared as pages are released
@@ -87,7 +99,7 @@ void process_free_resources(process_t *process) {
     }
 
     if (process->page_table != 0) {
-        pmm_free_page((uint64_t)(uintptr_t)process->page_table);
+        vmm_free_table(process->page_table);
         process->page_table = 0;
     }
 }
@@ -123,6 +135,10 @@ void process_table_init(void) {
 }
 
 process_t *process_alloc(uint32_t pid, const char *name) {
+    if (pid == 0 || process_find(pid) != 0) {
+        return 0;
+    }
+
     for (uint32_t i = 0; i < PROCESS_MAX_PROCESSES; i++) {
         if (g_processes[i].state == PROCESS_UNUSED) {
             process_init(&g_processes[i], pid, name);
@@ -322,7 +338,8 @@ void process_init(process_t *process, uint32_t pid, const char *name) {
     }
 }
 
-void process_set_entry(process_t *process, uint64_t pc, uint64_t sp, uint64_t pstate) {
+void process_set_entry(process_t *process, uint64_t pc, uint64_t sp,
+                       uint64_t pstate) {
     if (process == 0) {
         return;
     }
@@ -543,11 +560,13 @@ int process_remove_user_region_info(process_t *process, uint64_t start,
     return -1;
 }
 
-int process_remove_user_region(process_t *process, uint64_t start, uint64_t size) {
+int process_remove_user_region(process_t *process, uint64_t start,
+                               uint64_t size) {
     return process_remove_user_region_info(process, start, size, 0);
 }
 
-int process_user_range_contains(const process_t *process, uint64_t start, uint64_t size) {
+int process_user_range_contains(const process_t *process, uint64_t start,
+                                uint64_t size) {
     uint64_t end;
 
     if (process == 0) {

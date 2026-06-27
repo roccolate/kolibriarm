@@ -1,8 +1,24 @@
 #include <stdint.h>
+#include <stdlib.h>
 
 #include "unity/unity.h"
 #include "../kernel/mm/pmm.h"
+#include "../kernel/mm/vmm.h"
 #include "../kernel/process.h"
+
+#define PROCESS_RESOURCE_TEST_PAGES 64U
+
+static void init_process_resource_memory(void **mem) {
+    int rc = posix_memalign(mem, PAGE_SIZE,
+                            PROCESS_RESOURCE_TEST_PAGES * PAGE_SIZE);
+    if (rc != 0) {
+        TEST_FAIL("posix_memalign failed");
+    }
+
+    TEST_ASSERT_NOT_NULL(*mem);
+    pmm_init((uint64_t)(uintptr_t)*mem,
+             PROCESS_RESOURCE_TEST_PAGES * PAGE_SIZE);
+}
 
 void test_process_user_range_contains_registered_regions(void) {
     process_t process;
@@ -163,6 +179,12 @@ void test_process_alloc_user_region_bumps_page_aligned_arena(void) {
                              (uint64_t)process_alloc_user_region(&process,
                                                                  0,
                                                                  &second));
+
+    process.next_user_vaddr = PROCESS_USER_MMAP_LIMIT - 0x800ULL;
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
+                             (uint64_t)process_alloc_user_region(&process,
+                                                                 0x1000ULL,
+                                                                 &second));
 }
 
 void test_process_alloc_user_region_respects_region_limit(void) {
@@ -287,6 +309,8 @@ void test_process_table_alloc_release_and_limits(void) {
     process_table_init();
     TEST_ASSERT_NULL(process_current());
     TEST_ASSERT_EQUAL_UINT64(0, process_count());
+    TEST_ASSERT_NULL(process_alloc(0, "zero-pid"));
+    TEST_ASSERT_EQUAL_UINT64(0, process_count());
 
     for (uint32_t i = 0; i < PROCESS_MAX_PROCESSES; i++) {
         processes[i] = process_alloc(i + 1, "table");
@@ -296,6 +320,7 @@ void test_process_table_alloc_release_and_limits(void) {
         TEST_ASSERT_EQUAL_UINT64(i + 1, process_count());
     }
 
+    TEST_ASSERT_NULL(process_alloc(1, "duplicate"));
     TEST_ASSERT_NULL(process_alloc(99, "full"));
 
     process_set_current(processes[1]);
@@ -309,6 +334,7 @@ void test_process_table_alloc_release_and_limits(void) {
     TEST_ASSERT_EQUAL_UINT64(42, reused->pid);
     TEST_ASSERT_EQUAL_UINT64(PROCESS_READY, reused->state);
     TEST_ASSERT_EQUAL_UINT64(PROCESS_MAX_PROCESSES, process_count());
+    TEST_ASSERT_NULL(process_alloc(42, "duplicate-reused"));
 }
 
 void test_process_at_returns_active_slots_only(void) {
@@ -481,11 +507,14 @@ void test_process_dispatch_next_exit_leaves_current_zombie(void) {
  * ------------------------------------------------------------------ */
 
 void test_process_free_resources_releases_owned_pages(void) {
+    void *mem = NULL;
     process_t process;
     process_user_region_t region;
 
+    init_process_resource_memory(&mem);
+
     process_init(&process, 7, "free-pages");
-    process_set_page_table(&process, (uint64_t *)(uintptr_t)pmm_alloc_page());
+    process_set_page_table(&process, vmm_new_table());
     TEST_ASSERT_TRUE(process.page_table != 0);
 
     /*
@@ -524,12 +553,18 @@ void test_process_free_resources_releases_owned_pages(void) {
                              process.user_regions[0].flags &
                                  PROCESS_USER_REGION_OWNED_PAGES);
     TEST_ASSERT_EQUAL_UINT64(0, process.user_regions[0].paddr);
+
+    free(mem);
 }
 
 void test_process_free_resources_is_idempotent(void) {
+    void *mem = NULL;
     process_t process;
+
+    init_process_resource_memory(&mem);
+
     process_init(&process, 8, "idempotent");
-    process_set_page_table(&process, (uint64_t *)(uintptr_t)pmm_alloc_page());
+    process_set_page_table(&process, vmm_new_table());
     uint64_t region_start = 0;
     TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)process_alloc_user_region(&process,
                                                                    0x1000ULL,
@@ -555,6 +590,8 @@ void test_process_free_resources_is_idempotent(void) {
     TEST_ASSERT_EQUAL_UINT64(0,
                              process.user_regions[0].flags &
                                  PROCESS_USER_REGION_OWNED_PAGES);
+
+    free(mem);
 }
 
 void test_process_release_releases_resources(void) {
@@ -565,13 +602,16 @@ void test_process_release_releases_resources(void) {
      * mmap pages. The previous test verifies process_free_resources
      * works in isolation; this test verifies the integration.
      */
+    void *mem = NULL;
     process_t *process;
+
+    init_process_resource_memory(&mem);
+
     process_table_init();
     process = process_alloc(11, "release-me");
     TEST_ASSERT_NOT_NULL(process);
 
-    process_set_page_table(process,
-                           (uint64_t *)(uintptr_t)pmm_alloc_page());
+    process_set_page_table(process, vmm_new_table());
     TEST_ASSERT_TRUE(process->page_table != 0);
 
     uint64_t region_start = 0;
@@ -599,6 +639,8 @@ void test_process_release_releases_resources(void) {
         TEST_ASSERT_TRUE(p != 0);
         pmm_free_page(p);
     }
+
+    free(mem);
 }
 
 void test_process_mark_exited_is_idempotent_in_state(void) {

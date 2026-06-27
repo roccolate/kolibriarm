@@ -127,3 +127,33 @@ void test_vmm_kernel_mapping_can_be_replaced_with_user_mapping(void) {
 
     free(mem);
 }
+
+void test_vmm_free_table_releases_tables_not_leaf_pages(void) {
+    void *mem = NULL;
+    init_test_memory(&mem);
+
+    uint64_t free_before = pmm_free_count();
+    uint64_t *pgd = vmm_new_table();
+    uint64_t page = pmm_alloc_page();
+    uint64_t vaddr = 0x300000ULL;
+
+    TEST_ASSERT_NOT_NULL(pgd);
+    TEST_ASSERT_TRUE(page != 0);
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)vmm_map_page(pgd, vaddr, page,
+                                                       VMM_FLAG_READ |
+                                                           VMM_FLAG_WRITE));
+    TEST_ASSERT_TRUE(pmm_free_count() < free_before - 1U);
+
+    vmm_free_table(pgd);
+
+    /*
+     * The mapped leaf page is still caller-owned; only the page-table
+     * hierarchy should have returned to PMM here.
+     */
+    TEST_ASSERT_EQUAL_UINT64(free_before - 1U, pmm_free_count());
+
+    pmm_free_page(page);
+    TEST_ASSERT_EQUAL_UINT64(free_before, pmm_free_count());
+
+    free(mem);
+}

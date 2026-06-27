@@ -6,6 +6,14 @@
 #include "kernel/process.h"
 #include "kernel/user_image_format.h"
 
+/*
+ * Loaded KLI1 image descriptor.
+ *
+ * base/size describe the copied flat image in the process's future virtual
+ * address space. entry_offset is relative to base and must point inside that
+ * copied image. Stack registration is separate because stacks are loader-owned
+ * memory, not bytes from the image blob.
+ */
 typedef struct {
     const char *name;
     uint64_t base;

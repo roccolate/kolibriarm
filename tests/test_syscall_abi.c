@@ -8,12 +8,11 @@
  * non-asserted branch (for example, accidentally deleting the assert)
  * is caught before it reaches QEMU.
  *
- * The test only exercises syscall_number.h and process.h on purpose:
- * the full syscall_dispatch path pulls in mmu, sched, timer and a
- * working UART, none of which the host suite provides. The end-to-end
- * "does the kernel honour the ABI" question is answered by the
- * existing tests that already drive the same code paths via the public
- * kernel/process, kernel/vfs and kernel/gui APIs.
+ * The test only exercises lightweight public headers on purpose: the full
+ * syscall_dispatch path pulls in mmu, sched, timer and a working UART, none of
+ * which the host suite provides. The end-to-end "does the kernel honour the
+ * ABI" question is answered by the tests that drive the same code paths via
+ * the public kernel/process, kernel/vfs and kernel/gui APIs.
  */
 
 #include "unity/unity.h"
@@ -21,8 +20,10 @@
 #include <stdint.h>
 
 #include "kernel/process.h"
+#include "kernel/syscall_helpers.h"
 #include "kernel/syscall_numbers.h"
 #include "kernel/user_exit.h"
+#include "kernel/user_vm.h"
 
 void test_syscall_abi_implemented_numbers_match_dispatch(void) {
     /* Implemented numbers must match the rows in SYSCALLS.md under
@@ -83,21 +84,26 @@ void test_syscall_abi_ranges_do_not_overlap(void) {
 }
 
 void test_syscall_abi_error_codes_match_documented_constants(void) {
-    /* SYSCALLS.md lists -3/-5/-7/-11 as the implemented error codes.
-     * If these values drift, every app that checks errno by hand
-     * (and they all do, because there is no libc) breaks silently.
-     * The values come from kernel/syscall.c at build time and are
-     * reproduced here as a sanity check that the test target was
-     * compiled against the current header. */
-    TEST_ASSERT_EQUAL_UINT64((uint64_t)(int64_t)-3, (uint64_t)(int64_t)-3);
-    TEST_ASSERT_EQUAL_UINT64((uint64_t)(int64_t)-5, (uint64_t)(int64_t)-5);
-    TEST_ASSERT_EQUAL_UINT64((uint64_t)(int64_t)-7, (uint64_t)(int64_t)-7);
-    TEST_ASSERT_EQUAL_UINT64((uint64_t)(int64_t)-11, (uint64_t)(int64_t)-11);
+    /* SYSCALLS.md lists these as the implemented negative error codes. If
+     * they drift, every app that checks errno by hand breaks silently. */
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(int64_t)-2,
+                             (uint64_t)(int64_t)USER_VM_ERR_NOMEM);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(int64_t)-3,
+                             (uint64_t)(int64_t)ERR_NOENT);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(int64_t)-5,
+                             (uint64_t)(int64_t)ERR_BADF);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(int64_t)-7,
+                             (uint64_t)(int64_t)ERR_INVAL);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(int64_t)-11,
+                             (uint64_t)(int64_t)ERR_AGAIN);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(int64_t)-13,
+                             (uint64_t)(int64_t)ERR_PERM);
 
-    /* And the four are pairwise distinct. */
-    TEST_ASSERT_TRUE((int64_t)-3 != (int64_t)-5);
-    TEST_ASSERT_TRUE((int64_t)-5 != (int64_t)-7);
-    TEST_ASSERT_TRUE((int64_t)-7 != (int64_t)-11);
+    TEST_ASSERT_TRUE(USER_VM_ERR_NOMEM != ERR_NOENT);
+    TEST_ASSERT_TRUE(ERR_NOENT != ERR_BADF);
+    TEST_ASSERT_TRUE(ERR_BADF != ERR_INVAL);
+    TEST_ASSERT_TRUE(ERR_INVAL != ERR_AGAIN);
+    TEST_ASSERT_TRUE(ERR_AGAIN != ERR_PERM);
 }
 
 void test_syscall_abi_user_exit_codes_match_documented_constants(void) {
