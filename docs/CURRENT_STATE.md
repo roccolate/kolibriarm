@@ -3,6 +3,17 @@
 This is the short live snapshot of the QEMU desktop and its kernel support.
 Historical cleanup details live in `docs/TECH_DEBT_REVIEW.md`.
 
+## Baseline
+
+- Current version target: **v0.9 QEMU desktop baseline**.
+- Next version target: **v1.0 stable/debugged QEMU kernel + desktop release**.
+- Last verified kernel size: `kernel.bin: 89040 bytes (limit: 100000)`.
+- Standard checks for kernel, driver, boot, and ABI changes are `make`,
+  `make size`, and `make -C tests test`.
+- Targeted runtime checks include `make qemu-fs-test`,
+  `timeout 25s make qemu-fb`, `timeout 25s make qemu-usb`, and
+  `make qemu-net` when networking changes.
+
 ## Boot And Processes
 
 - The default board is QEMU `virt`.
@@ -41,6 +52,8 @@ Historical cleanup details live in `docs/TECH_DEBT_REVIEW.md`.
 ## Input And Drivers
 
 - UART, virtio-input, and USB HID feed the common input queue.
+- Mouse buttons are normalized as button indices: `0` left, `1` right,
+  `2` middle.
 - QEMU `virt` supports virtio-gpu, virtio-blk, virtio-net/DHCP, and xHCI USB
   HID on the development path.
 - The network stack is hand-written under `kernel/net/`; DHCP option parsing
@@ -57,6 +70,16 @@ Historical cleanup details live in `docs/TECH_DEBT_REVIEW.md`.
 - Owner-only window syscall lookup funnels through shared syscall helpers.
 - `tests/test_syscall_abi.c` and `tests/test_window_abi.c` pin the ABI details
   that apps depend on.
+
+## Next Engineering Focus
+
+- First: compact `kernel/net/` and `drivers/net/virtio_net.c`, especially the
+  static virtio-net RX/TX buffers; verify with `make qemu-net`.
+- Then: run the v1.0 QEMU stability sweep across boot, storage, display, input,
+  networking, syscalls, and process cleanup.
+- Later: GUI size work if `kernel.bin` pressure returns, xHCI cleanup only with
+  USB runtime checks, and `programs/apps/` stack/syscall-callsite review in
+  v1.1.
 
 ## Known Product Gaps
 

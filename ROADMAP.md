@@ -5,13 +5,15 @@ is functionally complete on QEMU `virt`: the kernel boots into a graphical
 desktop, the panel owns the taskbar, and shell / editor / monitor / clock are
 real per-process EL0 apps that own windows, take input, and redraw through the
 per-rect compositor path. The host test suite covers the window ABI, IPC,
-process isolation, partial redraw, USB HID parsing, and the syscall number
-table; `make` and `make -C tests test` both pass.
+process isolation, partial redraw, USB HID parsing, FAT32 integration, DHCP
+options, and the syscall number table; `make`, `make size`, and
+`make -C tests test` are the baseline checks. Latest verified size:
+`kernel.bin: 89040 bytes (limit: 100000)`. This is the current v0.9
+baseline.
 
-This file is intentionally short. It separates the alpha closure checklist
-from post-alpha work so "done" history does not hide real blockers. The
-"version targets" table at the bottom still records where the milestones
-landed.
+This file is intentionally short. It separates current verification from
+future work so "done" history does not hide real blockers. The "version
+targets" table at the bottom still records where the milestones landed.
 
 A phase is "done" only when its exit criteria pass on real QEMU runs (and,
 where applicable, on real hardware).
@@ -57,16 +59,18 @@ The kernel debug console (`k>`) ships with `help`, `mem`, `ps`, `ticks`,
 
 ---
 
-## Alpha closure checklist
+## Current verification checklist
 
-Alpha is a QEMU desktop release. It does not require Raspberry Pi hardware,
-hubs, SMP, TCP/HTTP, or multimedia. It does require repeatable build/test
-commands, a stable syscall table, honest docs, and a manually verified desktop
-session.
+The v0.9 QEMU desktop baseline is complete. It does not require Raspberry Pi
+hardware, hubs, SMP, TCP/HTTP, or multimedia. The v1.0 target is a stable,
+debugged, repeatable QEMU kernel and desktop release. Any release tag or
+kernel, driver, syscall, boot, or userland ABI change still requires repeatable
+build/test commands, a stable syscall table, honest docs, and a verified
+desktop smoke run.
 
 ### 1. Build and host tests
 
-Required before tagging alpha:
+Required before release tags and before landing risky runtime changes:
 
 - `make`
 - `make size`
@@ -89,12 +93,12 @@ Run these after kernel, boot, driver, syscall, or userland changes:
   raise, panel launch buttons, title-bar close, minimize/restore through the
   taskbar, editor typing, and opening all four apps without a crash.
 
-There is no scripted screenshot test yet. That is useful post-alpha work, not
-an alpha blocker.
+There is no scripted screenshot test yet. That is useful future work, not a
+current baseline blocker.
 
-### 3. ABI and docs freeze
+### 3. ABI and docs
 
-Before alpha, keep these in sync:
+Keep these in sync:
 
 - `SYSCALLS.md` documents `svc #0`, syscall number in `x8`, arguments in
   `x0..x6`, and return value in `x0`.
@@ -104,13 +108,13 @@ Before alpha, keep these in sync:
 - `README.md` describes QEMU desktop support as the current state and RPi as
   planned hardware work.
 
-New syscalls before alpha should be avoided unless they close a release
-blocker. If one is unavoidable, it needs the number, dispatch case,
-SYSCALLS.md row, wrapper, and host test in the same change.
+New syscalls should be avoided unless they close a real runtime gap. If one is
+unavoidable, it needs the number, dispatch case, SYSCALLS.md row, wrapper, and
+host test in the same change.
 
 ### 4. Known non-blockers
 
-These are explicitly allowed to remain after alpha:
+These are explicitly future product work, not current baseline blockers:
 
 - `sys_window_show` / `sys_window_hide`; minimize/restore already covers the
   visible desktop workflow.
@@ -141,10 +145,26 @@ regressed:
 
 ---
 
-## After alpha
+## v1.0 work plan
 
-The next set of candidates beyond alpha, in rough order of return on effort:
+The v1.0 target is a stable, debugged QEMU kernel and desktop release. Work in
+this order:
 
+- Compact `kernel/net/` and `drivers/net/virtio_net.c`, especially the static
+  RX/TX queue buffers. Verify with `make qemu-net`.
+- Run a QEMU-focused debug/stability sweep across boot, storage, display,
+  input, networking, syscalls, and process cleanup.
+- Touch `kernel/gui_*` or `drivers/usb/xhci.c` only if v1.0 checks expose
+  regressions or size pressure.
+- Keep `programs/apps/` stack usage and userland syscall-callsite review for
+  v1.1 unless an app bug blocks QEMU stability.
+
+## Later work
+
+The next set of candidates after v1.0, in rough order of return on effort:
+
+- v1.1 userland/app polish: stack usage, syscall-callsite review, and app UX
+  bugs that do not block v1.0.
 - RPi 4 PCIe host bridge setup so the VL805 xHCI controller appears to the
   existing USB stack.
 - USB hub support after root-port HID remains stable.
@@ -176,16 +196,18 @@ The next set of candidates beyond alpha, in rough order of return on effort:
 
 ## Version targets
 
-| Version | Milestone                                       | Phases                |
-|---------|-------------------------------------------------|-----------------------|
-| v0.1    | Boots, UART output                              | 0                     |
-| v0.2    | Memory management working                       | 0–1                   |
-| v0.3    | Preemptive multitasking                         | 0–2                   |
-| v0.4    | Real process address spaces                     | 0–2.5                 |
-| v0.5    | Drivers + framebuffer                           | 0–3                   |
-| v0.6    | Board abstraction cleanup                       | 0–3.6                 |
-| v0.7    | Multiple real EL0 apps + per-process windows    | 0–10.0–10.4           |
-| v0.8    | QEMU desktop: panel + taskbar + 4 apps + mouse  | 0–10.5                |
-| v1.0    | Usable on QEMU: real desktop, real apps         | 0–10.5                |
-| v1.5    | Running on real RPi 4 hardware                  | 0–10.5 + RPi bring-up |
-| v2.0    | Engine and multimedia runtime                   | 9–15                  |
+| Version | Status | Milestone | Phases |
+| --- | --- | --- | --- |
+| v0.1 | done | Boots, UART output | 0 |
+| v0.2 | done | Memory management working | 0-1 |
+| v0.3 | done | Preemptive multitasking | 0-2 |
+| v0.4 | done | Real process address spaces | 0-2.5 |
+| v0.5 | done | Drivers + framebuffer | 0-3 |
+| v0.6 | done | Board abstraction cleanup | 0-3.6 |
+| v0.7 | done | Multiple real EL0 apps + per-process windows | 0-10.0-10.4 |
+| v0.8 | done | QEMU desktop: panel + taskbar + 4 apps + mouse | 0-10.5 |
+| v0.9 | current | QEMU desktop baseline: tech-debt review closed, kernel under size limit, checks documented | 0-10.5 + cleanup |
+| v1.0 | next | Stable, debugged QEMU kernel + desktop release | v0.9 + QEMU stability |
+| v1.1 | planned | Userland/apps polish: stack usage and syscall-callsite review | v1.0 + apps |
+| v1.5 | planned | Running on real RPi 4 hardware | v1.0 + RPi bring-up |
+| v2.0 | future | Engine and multimedia runtime | 9-15 |

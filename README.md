@@ -54,13 +54,19 @@ KolibriARM is a bare-metal operating system for ARM64 (AArch64) processors, writ
 | Filesystem        | Working      | Fixed VFS, bootfs seed, tmpfs, FAT32 root 8.3 lookup |
 | GUI               | Working      | Kernel compositor has owner windows, panel/taskbar, backing buffers, title bars, damage rects, and app events |
 | Mouse / cursor    | Working      | virtio-input, USB HID, cursor movement, drag, click-to-raise, and hand regions |
-| Networking        | Working      | from-scratch virtio-net + DHCP, polled by the console thread |
+| Networking        | Working      | from-scratch virtio-net + DHCP; next cleanup target is buffer footprint |
 | RPi 4 port        | Builds       | Not booted on real hardware yet |
 
-## Current Milestone
+## Current Focus
 
-The current milestone is **alpha stabilization for the QEMU desktop**. Read
-[ROADMAP.md](ROADMAP.md) for the full breakdown. In short:
+The project is at the **v0.9 QEMU desktop baseline**. The v1.0 target is a
+stable, debugged, repeatable QEMU kernel and desktop release. Current
+engineering focus is reducing static kernel/driver footprint and tightening
+runtime checks before the v1.1 userland app review. Latest verified size:
+`kernel.bin: 89040 bytes (limit: 100000)`. Read [ROADMAP.md](ROADMAP.md) for
+the full breakdown.
+
+Baseline already in place:
 
 - [x] Ship flat C userland apps under `programs/apps/`, registered by name in
       the loader and exposed under `/kolibri/<name>`.
@@ -84,9 +90,18 @@ The current milestone is **alpha stabilization for the QEMU desktop**. Read
       `USB: device on port ...` / `USB: enumeration ok` / `USB HID:
       2 devices`.
 
+Next v1.0 cleanup targets:
+
+- Compact `kernel/net/` and `drivers/net/virtio_net.c`, especially the static
+  virtio-net RX/TX buffers; verify with `make qemu-net`.
+- Leave `programs/apps/` stack usage and userland syscall-callsite review for
+  v1.1 unless an app bug blocks QEMU stability.
+- Revisit GUI size or xHCI internals only with the relevant QEMU runtime checks
+  in the loop.
+
 Still out of scope:
-- SMP, full FAT32 write (drivers/fat32 already supports create/
-  delete/rename + chain grow), real HTTP client.
+- SMP, full FAT32 write beyond the current create/delete/rename + chain-grow
+  support, and real HTTP client.
 - USB hub support.
 - RPi 4 hardware bring-up (it builds, but PCIe host bridge setup for
   the VL805 xHCI controller is not wired yet).

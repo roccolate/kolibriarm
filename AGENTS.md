@@ -19,6 +19,11 @@ The QEMU `virt` target boots into a small graphical desktop:
   arguments in `x0..x6`.
 - Process dispatch, syscall user-pointer validation, GUI ownership checks, and
   boot init status have shared helpers; do not reintroduce local copies.
+- The original technical-debt review is closed. Track new debt in `ROADMAP.md`,
+  focused issues, or a fresh review document. The current quick-return cleanup
+  target for v1.0 is `kernel/net/` plus `drivers/net/virtio_net.c`; leave
+  `programs/apps/` stack/syscall-callsite review for v1.1 unless an app bug
+  blocks QEMU stability.
 
 ## Boundaries
 

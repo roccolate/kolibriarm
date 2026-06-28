@@ -28,7 +28,7 @@ timeout 25s make qemu-fb
 timeout 25s make qemu-usb
 ```
 
-Current closure size: `kernel.bin: 99840 bytes (limit: 100000)`.
+Current closure size: `kernel.bin: 89040 bytes (limit: 100000)`.
 
 ## Closed Items
 
@@ -68,6 +68,18 @@ Current closure size: `kernel.bin: 99840 bytes (limit: 100000)`.
 - KLI1 image-format constants live in `kernel/user_image_format.h`.
 - Boot status lives in `kernel/init_status.{c,h}`.
 - DHCP option parsing lives in `kernel/net/dhcp_options.{c,h}`.
+
+## Current Follow-Up Pointer
+
+Do not reopen this closed backlog for new optimization work. The latest
+file-by-file kernel and driver pass left the tree clean at
+`9e66d71 review(core): harden kernel and driver paths`.
+
+The next best technical target belongs in `ROADMAP.md`: compact
+`kernel/net/` and `drivers/net/virtio_net.c`, mainly the static RX/TX queue
+buffers. Verify that work with the baseline checks plus `make qemu-net`.
+Leave `programs/apps/` stack usage and userland syscall-callsite review for
+the v1.1 userland pass.
 
 ## Follow-Up Policy
 
