@@ -26,7 +26,6 @@
 
 #include "libkarm/syscall.h"
 #include "libkarm/string.h"
-#include "libkarm/errno.h"
 #include "libkarmdesk/gui.h"
 
 // Geometry constants for a 640x480 virtio-gpu framebuffer.
@@ -108,13 +107,6 @@ typedef struct {
     char           button_labels[BTN_COUNT][LABEL_CAP];
     gui_event_t    events[EVENT_CAP];
 } panel_state_t;
-
-static void write_cstr(long fd, const char *s) {
-    while (*s) {
-        (void)kli_write((int)fd, s, 1);
-        s++;
-    }
-}
 
 static void copy_label(char *dst, size_t dst_size, const char *src) {
     size_t i = 0;
@@ -262,13 +254,13 @@ static void launch_button(panel_state_t *p, int idx) {
      * layout stays fixed, but its click is just a no-op.
      */
     if (strcmp(p->button_labels[idx], "panel") == 0) {
-        write_cstr(1, "panel: already running (no nested panels)\n");
+        kli_write_cstr(1, "panel: already running (no nested panels)\n");
         return;
     }
 
-    write_cstr(1, "panel: launch ");
-    write_cstr(1, p->button_labels[idx]);
-    write_cstr(1, "\n");
+    kli_write_cstr(1, "panel: launch ");
+    kli_write_cstr(1, p->button_labels[idx]);
+    kli_write_cstr(1, "\n");
 
     (void)kli_spawn(path, 0);
 }
@@ -440,13 +432,13 @@ int main(int argc, char **argv) {
         }
     }
 
-    write_cstr(1, "panel: starting\n");
+    kli_write_cstr(1, "panel: starting\n");
     init_button_labels(&p);
 
     p.wid = gui_window_create(0, PANEL_Y, SCREEN_W, PANEL_H,
                               COLOR_BG, COLOR_BORDER, "panel");
     if (p.wid < 0) {
-        write_cstr(1, "panel: window create failed\n");
+        kli_write_cstr(1, "panel: window create failed\n");
         // Park in a yield loop so the kernel debug console (k>) still
         // gets a chance to run and 'ps' / 'proclist' queries see a
         // process to point at, even when GUI setup failed.
@@ -479,10 +471,10 @@ int main(int argc, char **argv) {
 
     redraw_all(&p);
     refresh_running(&p);
-    write_cstr(1, "panel: ready\n");
+    kli_write_cstr(1, "panel: ready\n");
 
 #ifdef PANEL_FORCE_FAULT
-    write_cstr(1, "panel: forced fault\n");
+    kli_write_cstr(1, "panel: forced fault\n");
     *((volatile uint64_t *)(uintptr_t)0) = 0x50414e454c464c54ULL;
 #endif
 
@@ -493,14 +485,14 @@ int main(int argc, char **argv) {
      * window, and stays alive. Disabled by default; enable by
      * passing -DPANEL_AUTO_TEST to the compiler.
      */
-    write_cstr(1, "panel: auto-test launch every button\n");
+    kli_write_cstr(1, "panel: auto-test launch every button\n");
     for (int idx = 0; idx < BTN_COUNT; idx++) {
         if (strcmp(p.button_labels[idx], "panel") == 0) {
             continue;
         }
-        write_cstr(1, "panel: auto-test click ");
-        write_cstr(1, p.button_labels[idx]);
-        write_cstr(1, "\n");
+        kli_write_cstr(1, "panel: auto-test click ");
+        kli_write_cstr(1, p.button_labels[idx]);
+        kli_write_cstr(1, "\n");
         launch_button(&p, idx);
         (void)kli_yield();
     }

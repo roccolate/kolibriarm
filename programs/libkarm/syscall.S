@@ -1,9 +1,11 @@
 // libkarm/syscall.S
 //
-// The only place in all of userland that issues the `svc #0` instruction.
+// Raw syscall trampolines for the generic typed wrappers in syscall.h.
 // Each trampoline takes a syscall number plus 0..7 register arguments and
 // returns the raw `x0` value (long). The typed C wrappers in syscall.h
-// call into these; they do no interpretation of the return value.
+// call into these; they do no interpretation of the return value. Small
+// assembly helpers such as io.S may issue fixed syscalls directly when that
+// keeps every freestanding app smaller than calling through a C wrapper.
 //
 // KolibriARM syscall ABI (kernel/syscall.c):
 //   x0..x6 = arguments

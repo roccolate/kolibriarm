@@ -27,7 +27,6 @@
 
 #include "libkarm/syscall.h"
 #include "libkarm/string.h"
-#include "libkarm/errno.h"
 #include "libkarmdesk/gui.h"
 
 #define WIN_X           72
@@ -69,13 +68,6 @@ typedef struct {
     char     name[16];
 } proc_entry_t;
 
-static void write_cstr(long fd, const char *s) {
-    while (*s) {
-        (void)kli_write((int)fd, s, 1);
-        s++;
-    }
-}
-
 typedef struct {
     /* Current input line being edited. */
     char   line[LINE_CAP];
@@ -99,6 +91,7 @@ typedef struct {
     /* Syscall scratch buffers. */
     uint64_t   info[3];
     char       numbuf[24];
+    char       display_lines[DISPLAY_LINES][DISPLAY_COLS];
     proc_entry_t procs[PROC_CAP];
     char       argv_strs[ARGV_MAX][LINE_CAP];
     uint64_t   argv_ptrs[ARGV_MAX];
@@ -207,10 +200,9 @@ static void redraw(shell_state_t *s) {
     (void)gui_window_draw_rect(s->wid, 1, 0, WIN_W - 2,
                                WIN_H - TITLE_BAR_H - 2, COLOR_BG);
     draw_text(s->wid, 12, 8, "USER SHELL");
-    char (*out_lines)[DISPLAY_COLS] = (char (*)[DISPLAY_COLS])s->numbuf;
-    render_log_view(s, out_lines);
+    render_log_view(s, s->display_lines);
     for (int i = 0; i < DISPLAY_LINES; i++) {
-        draw_text(s->wid, 12, 28 + i * 16, out_lines[i]);
+        draw_text(s->wid, 12, 28 + i * 16, s->display_lines[i]);
     }
     /* Prompt row sits just below the log view, anchored to the
      * bottom of the visible area regardless of scroll_offset. */
@@ -452,7 +444,7 @@ int main(int argc, char **argv) {
     (void)argv;
 
     /*
-     * shell_state_t is ~1.7 KB and lives on the C stack instead of
+     * shell_state_t is ~2.4 KB and lives on the C stack instead of
      * BSS. The loader only copies the KLI1 image bytes (header +
      * code + rodata) into the per-process image slot, so a static
      * shell_state_t would land in unmapped memory and the first
@@ -479,12 +471,12 @@ int main(int argc, char **argv) {
         }
     }
 
-    write_cstr(1, "shell: starting\n");
+    kli_write_cstr(1, "shell: starting\n");
 
     s.wid = gui_window_create(WIN_X, WIN_Y, WIN_W, WIN_H,
                               COLOR_BG, COLOR_BORDER, "shell");
     if (s.wid < 0) {
-        write_cstr(1, "shell: window create failed\n");
+        kli_write_cstr(1, "shell: window create failed\n");
         return 1;
     }
     (void)gui_window_set_title(s.wid, "shell", TITLE_BAR_H);

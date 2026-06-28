@@ -14,7 +14,6 @@
 
 #include "libkarm/syscall.h"
 #include "libkarm/string.h"
-#include "libkarm/errno.h"
 #include "libkarmdesk/gui.h"
 
 #define WIN_X          56
@@ -29,13 +28,6 @@
 #define COLOR_BG       0xff182024U
 #define COLOR_BORDER   0xff809080U
 #define COLOR_TEXT     0xffd0e0d0U
-
-static void write_cstr(long fd, const char *s) {
-    while (*s) {
-        (void)kli_write((int)fd, s, 1);
-        s++;
-    }
-}
 
 static void draw_text(long wid, long x, long y, const char *s) {
     (void)gui_window_draw_text(wid, x, y, COLOR_TEXT, s);
@@ -98,12 +90,12 @@ int main(int argc, char **argv) {
     (void)argc;
     (void)argv;
 
-    write_cstr(1, "monitor: starting\n");
+    kli_write_cstr(1, "monitor: starting\n");
 
     long wid = gui_window_create(WIN_X, WIN_Y, WIN_W, WIN_H,
                                  COLOR_BG, COLOR_BORDER, "monitor");
     if (wid < 0) {
-        write_cstr(1, "monitor: window create failed\n");
+        kli_write_cstr(1, "monitor: window create failed\n");
         return 1;
     }
     (void)gui_window_set_title(wid, "monitor", TITLE_BAR_H);

@@ -55,15 +55,18 @@ QEMU_FS_TEST_LOG := $(BUILD_DIR)/qemu-fs-test.log
 QEMU_FS_TEST_TIMEOUT ?= 25s
 
 # programs/libkarm is the freestanding userland support library:
-# syscall trampolines, crt0, and small string/number helpers. The
-# libkarmdesk window wrappers are header-only and compile into each app.
+# syscall trampolines, crt0, small syscall-backed I/O helpers, and
+# string/number helpers. The libkarmdesk window wrappers are header-only
+# and compile into each app.
 LIBKARM_DIR := programs/libkarm
 LIBKARM_SYSCALL_OBJ := $(BUILD_DIR)/$(LIBKARM_DIR)/syscall.o
 LIBKARM_CRT0_OBJ := $(BUILD_DIR)/$(LIBKARM_DIR)/crt0.o
 LIBKARM_STRING_OBJ := $(BUILD_DIR)/$(LIBKARM_DIR)/string.o
+LIBKARM_IO_OBJ := $(BUILD_DIR)/$(LIBKARM_DIR)/io.o
 LIBKARM_OBJS := \
     $(LIBKARM_SYSCALL_OBJ) \
     $(LIBKARM_CRT0_OBJ) \
+    $(LIBKARM_IO_OBJ) \
     $(LIBKARM_STRING_OBJ)
 
 # Per-app libkarm dependencies. Keep string.o out of apps that do not
@@ -270,6 +273,7 @@ $(BUILD_DIR)/$(APPS_DIR)/%.elf: $(BUILD_DIR)/$(APPS_DIR)/%.o \
     $(BUILD_DIR)/$(APPS_DIR)/%_header.o \
     $(LIBKARM_SYSCALL_OBJ) \
     $(LIBKARM_CRT0_OBJ) \
+    $(LIBKARM_IO_OBJ) \
     $$(APP_LIBS_$$*) $(BUILD_DIR)/$(APPS_DIR)/%_end.o \
     $(APPS_DIR)/image.ld
 	$(LOG_LD)$(LD) -T $(APPS_DIR)/image.ld -nostdlib \
@@ -277,6 +281,7 @@ $(BUILD_DIR)/$(APPS_DIR)/%.elf: $(BUILD_DIR)/$(APPS_DIR)/%.o \
 	    $(BUILD_DIR)/$(APPS_DIR)/$*_header.o \
 	    $(LIBKARM_SYSCALL_OBJ) \
 	    $(LIBKARM_CRT0_OBJ) \
+	    $(LIBKARM_IO_OBJ) \
 	    $(APP_LIBS_$*) $(BUILD_DIR)/$(APPS_DIR)/$*_end.o \
 	    -o $@
 

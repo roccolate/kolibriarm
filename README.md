@@ -60,11 +60,11 @@ KolibriARM is a bare-metal operating system for ARM64 (AArch64) processors, writ
 ## Current Focus
 
 The project is at the **v0.9 QEMU desktop baseline**. The v1.0 target is a
-stable, debugged, repeatable QEMU kernel and desktop release. Current
-engineering focus is reducing static kernel/driver footprint and tightening
-runtime checks before the v1.1 userland app review. Latest verified size:
-`kernel.bin: 89368 bytes (limit: 100000)`. Read [ROADMAP.md](ROADMAP.md) for
-the full breakdown.
+stable, debugged, repeatable QEMU kernel and desktop release. The first v1.1
+userland pass has started: app stack usage is measured by `make stack-check`,
+and app syscall callsites are being moved through shared libkarm helpers.
+Latest verified size: `kernel.bin: 89256 bytes (limit: 100000)`. Read
+[ROADMAP.md](ROADMAP.md) for the full breakdown.
 
 Baseline already in place:
 
@@ -90,12 +90,12 @@ Baseline already in place:
       `USB: device on port ...` / `USB: enumeration ok` / `USB HID:
       2 devices`.
 
-Next v1.0 cleanup targets:
+Next cleanup targets:
 
-- Continue the QEMU networking stability pass after the first virtio-net
-  buffer-footprint reduction; verify with `make qemu-net`.
-- Leave `programs/apps/` stack usage and userland syscall-callsite review for
-  v1.1 unless an app bug blocks QEMU stability.
+- Continue the QEMU stability sweep; verify networking changes with
+  `make qemu-net`.
+- Continue the v1.1 `programs/apps/` stack usage and userland
+  syscall-callsite review.
 - Revisit GUI size or xHCI internals only with the relevant QEMU runtime checks
   in the loop.
 

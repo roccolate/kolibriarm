@@ -26,13 +26,6 @@
 #define EVENT_CAP          4
 #define YIELDS_PER_SEC   200
 
-static void write_cstr(long fd, const char *s) {
-    while (*s) {
-        (void)kli_write((int)fd, s, 1);
-        s++;
-    }
-}
-
 static void format_hhmmss(uint64_t ticks, char *out) {
     // 100 Hz timer: seconds = ticks / 100.
     uint64_t total_seconds = ticks / 100ULL;
@@ -67,12 +60,12 @@ int main(int argc, char **argv) {
     (void)argc;
     (void)argv;
 
-    write_cstr(1, "clock: starting\n");
+    kli_write_cstr(1, "clock: starting\n");
 
     long wid = gui_window_create(440, 64, WIN_W, WIN_H,
                                  0xff202830LL, 0xff808080LL, "clock");
     if (wid < 0) {
-        write_cstr(1, "clock: window create failed\n");
+        kli_write_cstr(1, "clock: window create failed\n");
         return 1;
     }
     (void)gui_window_set_title(wid, "clock", TITLE_BAR_H);

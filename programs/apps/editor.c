@@ -15,7 +15,6 @@
 
 #include "libkarm/syscall.h"
 #include "libkarm/string.h"
-#include "libkarm/errno.h"
 #include "libkarmdesk/gui.h"
 
 #define O_RDONLY        0
@@ -35,13 +34,6 @@
 #define COLOR_STATUS    0xffc0d0e0U
 #define COLOR_TEXT      0xffe0e8f0U
 #define COLOR_CARET     0xffe0e8f0U
-
-static void write_cstr(long fd, const char *s) {
-    while (*s) {
-        (void)kli_write((int)fd, s, 1);
-        s++;
-    }
-}
 
 static void resolve_path(int argc, char **argv, char *out) {
     if (argc >= 2 && argv[1] != 0) {
@@ -282,16 +274,16 @@ static void print_argv(int argc, char **argv) {
     if (argc <= 0) {
         return;
     }
-    write_cstr(1, "editor: argv=");
+    kli_write_cstr(1, "editor: argv=");
     for (int i = 0; i < argc; i++) {
         if (i > 0) {
-            write_cstr(1, " ");
+            kli_write_cstr(1, " ");
         }
         if (argv[i] != 0) {
-            write_cstr(1, argv[i]);
+            kli_write_cstr(1, argv[i]);
         }
     }
-    write_cstr(1, "\n");
+    kli_write_cstr(1, "\n");
 }
 
 // Arrow keys come in as synthetic codes from drivers/input/input.c.
@@ -306,7 +298,7 @@ int main(int argc, char **argv) {
     char render[RENDER_COLS];
     gui_event_t events[EVENT_CAP];
 
-    write_cstr(1, "editor: starting\n");
+    kli_write_cstr(1, "editor: starting\n");
     print_argv(argc, argv);
 
     resolve_path(argc, argv, path);
@@ -316,7 +308,7 @@ int main(int argc, char **argv) {
     long wid = gui_window_create(WIN_X, WIN_Y, WIN_W, WIN_H,
                                  COLOR_BG, COLOR_BORDER, "editor");
     if (wid < 0) {
-        write_cstr(1, "editor: window create failed\n");
+        kli_write_cstr(1, "editor: window create failed\n");
         return 1;
     }
     (void)gui_window_set_title(wid, "editor", TITLE_BAR_H);

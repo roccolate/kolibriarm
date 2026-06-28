@@ -8,7 +8,7 @@ per-rect compositor path. The host test suite covers the window ABI, IPC,
 process isolation, partial redraw, USB HID parsing, FAT32 integration, DHCP
 options, and the syscall number table; `make`, `make size`, and
 `make -C tests test` are the baseline checks. Latest verified size:
-`kernel.bin: 89368 bytes (limit: 100000)`. This is the current v0.9
+`kernel.bin: 89256 bytes (limit: 100000)`. This is the current v0.9
 baseline.
 
 This file is intentionally short. It separates current verification from
@@ -165,7 +165,9 @@ this order:
 The next set of candidates after v1.0, in rough order of return on effort:
 
 - v1.1 userland/app polish: stack usage, syscall-callsite review, and app UX
-  bugs that do not block v1.0.
+  bugs that do not block v1.0. The first pass has centralized app debug-string
+  writes through the small `kli_write_cstr` libkarm helper; keep
+  `make stack-check` in the loop.
 - RPi 4 PCIe host bridge setup so the VL805 xHCI controller appears to the
   existing USB stack.
 - USB hub support after root-port HID remains stable.
@@ -209,6 +211,6 @@ The next set of candidates after v1.0, in rough order of return on effort:
 | v0.8 | done | QEMU desktop: panel + taskbar + 4 apps + mouse | 0-10.5 |
 | v0.9 | current | QEMU desktop baseline: tech-debt review closed, kernel under size limit, checks documented | 0-10.5 + cleanup |
 | v1.0 | next | Stable, debugged QEMU kernel + desktop release | v0.9 + QEMU stability |
-| v1.1 | planned | Userland/apps polish: stack usage and syscall-callsite review | v1.0 + apps |
+| v1.1 | in progress | Userland/apps polish: stack usage and syscall-callsite review | v1.0 + apps |
 | v1.5 | planned | Running on real RPi 4 hardware | v1.0 + RPi bring-up |
 | v2.0 | future | Engine and multimedia runtime | 9-15 |

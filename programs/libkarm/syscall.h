@@ -96,6 +96,8 @@ static inline long kli_write(int fd, const void *buf, size_t len) {
     return __syscall3(SYS_WRITE, (long)fd, (long)(uintptr_t)buf, (long)len);
 }
 
+void kli_write_cstr(int fd, const char *s);
+
 static inline long kli_seek(int fd, long offset, long whence) {
     return __syscall3(SYS_SEEK, (long)fd, offset, whence);
 }
