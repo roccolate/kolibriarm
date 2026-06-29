@@ -9,109 +9,110 @@
 
 ---
 
-## What is ArmoniOS?
+## A Tiny Desktop OS For ARM
 
-ArmoniOS is a bare-metal operating system for ARM64 (AArch64) processors,
-written entirely in C and AArch64 assembly. It takes direct inspiration from
-[KolibriOS](https://kolibrios.org) and [MenuetOS](https://www.menuetos.net/)
-— two x86 operating systems celebrated for their extreme compactness, speed,
-and elegance — and brings those principles to modern ARM hardware.
+ArmoniOS is a small bare-metal operating system for ARM64. It boots directly
+into a graphical desktop on QEMU: a panel, a shell, an editor, a file manager,
+a monitor, a clock, mouse input, windows, process isolation, storage, USB HID,
+and virtio-net DHCP.
 
-**Core philosophy:**
-- Every byte is intentional. No unnecessary abstraction layers.
-- The kernel fits in your head. Small enough to read in a weekend.
-- No libc. No POSIX. No Linux compatibility layer. Just clean system calls.
-- Keep boot fast and observable on QEMU before claiming hardware numbers.
-- Keep the memory footprint small enough for constrained ARM boards.
+The project is inspired by [KolibriOS](https://kolibrios.org) and
+[MenuetOS](https://www.menuetos.net/): compact systems where the whole OS is
+small enough to understand, fast enough to feel immediate, and direct enough
+that every subsystem has a visible purpose.
+
+ArmoniOS is not a Linux clone. There is no libc, no POSIX layer, and no hosted
+runtime. User programs are freestanding AArch64 images that talk to the kernel
+through a small `svc #0` syscall ABI.
+
+## Try The Desktop
+
+```bash
+git clone https://github.com/roccolate/armonios
+cd armonios
+make
+make qemu-fb-visible
+```
+
+In the visible QEMU window you can:
+
+- click panel buttons to launch or focus `shell`, `editor`, `files`,
+  `monitor`, and `clock`;
+- drag windows by their title bars;
+- type into the editor;
+- browse and manage FAT32 root files through `files` when a FAT disk is
+  present;
+- use the shell to run apps, list processes, inspect memory, and kill the last
+  spawned process.
+
+For a quick headless smoke test:
+
+```bash
+timeout 25s make qemu-fb
+```
+
+Success means the serial log reaches `panel: ready`.
 
 ---
 
-## Current Status
+## What Works Today
 
-> **A functional QEMU desktop for a small AArch64 OS.** The kernel boots on
-> QEMU `virt`, brings up memory management, enables an identity-mapped MMU,
-> runs EL0 app processes with syscall and timer-IRQ context switches, and keeps
-> the minimal `k>` debug console as a fallback. With `make qemu-blk`, QEMU
-> boots with a generated FAT32 virtio-blk image and reloads apps through the
-> VFS path.
->
-> Userland apps are freestanding C programs built as flat AArch64 images under
-> `programs/apps/`, linked with `programs/libkarm` and
-> `programs/libkarmdesk`, embedded through bootfs, and exposed under
-> the `/armonios/<name>` app namespace. The QEMU desktop has
-> per-process window ownership,
-> a panel taskbar, shell / editor / monitor / clock apps, cursor/focus/drag
-> handling, per-window backing buffers, and rect-based redraw. See
-> [ROADMAP.md](docs/ROADMAP.md) for what is still missing.
+ArmoniOS is currently at the **v0.9 QEMU desktop baseline**. The next target is
+**v1.0: a stable, repeatable QEMU desktop release**.
 
-| Component         | Status       | Notes                                  |
-|-------------------|-------------|----------------------------------------|
-| Bootloader        | Working      | AArch64 ASM, QEMU virt tested          |
-| Physical memory   | Working      | Bitmap allocator, host tests           |
-| Virtual memory    | Working      | Identity map, per-process user tables, user flags, unmap |
-| Scheduler         | Working      | Round-robin, timer IRQ, kernel + EL0 threads |
-| IRQ dispatch      | Working      | GICv2, timer PPI, UART RX, C handler table |
-| UART driver       | Working      | PL011 TX polling, RX IRQ ring, QEMU console input echo |
-| Syscalls          | Working      | frozen implemented ABI for process, memory, VFS, IPC, info, window/compositor |
-| Userland          | Working      | Freestanding C EL0 apps with `libkarm`, `libkarmdesk`, and shared `crt0` |
-| Framebuffer       | Working      | virtio-gpu scanout, primitives, bitmap text, alpha |
-| Storage           | Working      | virtio-blk sector read/write, FAT32 read + limited overwrite |
-| Filesystem        | Working      | Fixed VFS, bootfs seed, tmpfs, FAT32 root 8.3 lookup |
-| GUI               | Working      | Kernel compositor has owner windows, panel/taskbar, backing buffers, title bars, damage rects, and app events |
-| Mouse / cursor    | Working      | virtio-input, USB HID, cursor movement, drag, click-to-raise, and hand regions |
-| Networking        | Working      | from-scratch virtio-net + DHCP; next cleanup target is buffer footprint |
-| RPi 4 port        | Builds       | Not booted on real hardware yet |
+Latest verified size: `kernel.bin: 92696 bytes (limit: 100000)`.
 
-## Current Focus
+Highlights:
 
-The project is at the **v0.9 QEMU desktop baseline**. The v1.0 target is a
-stable, debugged, repeatable QEMU kernel and desktop release. The first v1.1
-userland stack pass is in place: `shell`, `editor`, and `panel` keep their
-persistent state in anonymous user mappings instead of on the fixed 4 KB app
-stack, and current app syscall callsites go through `libkarm` / `libkarmdesk`
-wrappers.
-Latest verified size: `kernel.bin: 85840 bytes (limit: 100000)`. Read
-[ROADMAP.md](docs/ROADMAP.md) for the full breakdown.
+- AArch64 boot path, MMU setup, physical/virtual memory managers.
+- Preemptive scheduling with kernel threads and EL0 user processes.
+- Per-process address spaces, user stacks, and KLI1 flat app images.
+- A kernel-owned GUI compositor with windows, focus, dragging, title bars,
+  cursor regions, backing buffers, and damage-rectangle redraw.
+- Freestanding C apps under `programs/apps/`: `panel`, `shell`, `editor`,
+  `files`, `monitor`, and `clock`.
+- VFS with bootfs, tmpfs, and FAT32 integration through virtio-blk; `SYS_OPEN`
+  supports `O_CREAT` for FAT32 root files under `/fat/<8.3-name>`.
+- Input through virtio-input and USB HID keyboard/mouse paths.
+- virtio-net initialization and DHCP on QEMU.
+- Host tests for memory, scheduler, process isolation, syscalls, GUI ABI,
+  FAT32, DHCP options, USB/HID parsing, and app-image layout.
 
-Baseline already in place:
+Release gates currently used:
 
-- [x] Ship flat C userland apps under `programs/apps/`, registered by name in
-      the loader and exposed under the `/armonios/<name>` namespace.
-- [x] Add window syscalls (`sys_window_create`, `sys_window_draw_text`,
-      `sys_window_event`, `sys_window_destroy`) with per-process ownership.
-- [x] Consume the queued mouse events: visible cursor, click-to-raise,
-      window drag, focus visualization.
-- [x] Add a panel process that owns the taskbar and launches apps by
-      clicking icons.
-- [x] Ship four real apps: `shell`, `editor`, `monitor`, `clock`
-      as windowed desktop apps.
-- [x] Port KolibriOS's 8x8 font (`8X8ISXP`-shaped, ASCII 32-126).
-- [x] Load native `KLI1` flat app images from bootfs; unknown image magic is
-      rejected instead of treated as a compatibility format.
-- [x] USB HID foundations: PCI ECAM scan + BAR auto-assignment,
-      xHCI poll-mode driver with real control and interrupt-in transfers,
-      boot-protocol HID report parser, descriptor walker, and a
-      kernel-wide poll loop that feeds the existing `input_queue`.
-      `make qemu-usb` boots the kernel with `qemu-xhci + usb-kbd +
-      usb-mouse` and reaches `USB: controller initialized` /
-      `USB: device on port ...` / `USB: enumeration ok` / `USB HID:
-      2 devices`.
+```bash
+make
+make size
+make -C tests test
+make stack-check
+make qemu-fs-test
+timeout 25s make qemu-fb
+timeout 25s make qemu-usb
+timeout 25s make qemu-net
+```
 
-Next cleanup targets:
+See [docs/ROADMAP.md](docs/ROADMAP.md) for the version plan and remaining
+work.
 
-- Continue the QEMU stability sweep; verify networking changes with
-  `make qemu-net`.
-- Continue v1.1 `programs/apps/` polish around app UX and any new syscall
-  callsites; keep `make stack-check` in the loop.
-- Revisit GUI size or xHCI internals only with the relevant QEMU runtime checks
-  in the loop.
+---
 
-Still out of scope:
-- SMP, full FAT32 write beyond the current create/delete/rename + chain-grow
-  support, and real HTTP client.
+## Philosophy
+
+- Keep the kernel small enough to read in one sitting.
+- Prefer direct C and small AArch64 assembly boundaries over large frameworks.
+- Make every byte earn its place; the kernel binary has a tight size gate.
+- Keep QEMU fast, observable, and repeatable before claiming hardware support.
+- Port ideas from classic small OSes, not their x86 assembly.
+
+## Not Yet
+
+These are planned or future work, not current release claims:
+
+- Raspberry Pi 4 real-hardware boot.
 - USB hub support.
-- RPi 4 hardware bring-up (it builds, but PCIe host bridge setup for
-  the VL805 xHCI controller is not wired yet).
+- TCP/HTTP clients.
+- SMP and secondary-core startup.
+- Engine and multimedia runtime.
 
 ---
 
@@ -171,12 +172,18 @@ make qemu
 
 # In the shell app, try:
 # help
+# pwd
+# cd /fat
 # ls
+# ls /fat
+# cat /tmp/note
 # ps
 # ticks
 # mem
 # run editor
+# run files
 # run editor myfile.txt    # passes myfile.txt as argv[1] to the editor
+# run editor /fat/NOTE.TXT # opens or creates a FAT32 root file
 # run monitor
 # run clock
 # kill last
@@ -191,9 +198,9 @@ make qemu-fs-test
 # Run in QEMU with virtio-gpu headless and boot the desktop
 make qemu-fb
 
-# Run in QEMU with a visible virtio-gpu window and a virtio-mouse-device.
-# This is the interactive desktop: click to raise windows, drag the
-# title bar, click panel buttons, etc.
+# Run in QEMU with a visible virtio-gpu window, USB keyboard, and virtio mouse.
+# This is the interactive desktop: click to raise windows, type into
+# focused apps, drag title bars, click panel buttons, etc.
 make qemu-fb-visible
 
 # Run in QEMU with a USB host (qemu-xhci + usb-kbd + usb-mouse).

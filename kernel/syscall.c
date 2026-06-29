@@ -32,6 +32,7 @@
 #include "kernel/user_vm.h"
 #include "kernel/vfs.h"
 #include "uart/pl011.h"
+#include "usb/hid_driver.h"
 
 #define FD_STDIN  0ULL
 #define FD_STDOUT 1ULL
@@ -79,7 +80,8 @@ static int64_t sys_open(process_t *process, uint64_t path_ptr,
     char path[VFS_MAX_PATH];
     int fd;
 
-    if (flags > VFS_O_RDWR ||
+    if ((flags & ~VFS_O_ALLOWED) != 0 ||
+        (flags & VFS_O_ACCMODE) == VFS_O_ACCMODE ||
         sys_user_copy_cstr(process, path_ptr, path, sizeof(path)) != 0) {
         return ERR_INVAL;
     }
@@ -464,6 +466,12 @@ static int sys_yield_process(exception_frame_t *frame) {
     if (current == 0) {
         return 0;
     }
+    /*
+     * The frame may be replaced with the next process' saved context when the
+     * dispatch succeeds. Store the yielding process' return value in its saved
+     * register set before switching away.
+     */
+    current->regs[0] = 0;
     return process_dispatch_next(current, frame, PROCESS_DISPATCH_PREEMPT);
 }
 
@@ -840,20 +848,28 @@ static int64_t sys_window_minimize(process_t *process, uint64_t window_id) {
 }
 
 /*
- * sys_window_restore: inverse of sys_window_minimize. The window
- * raises to the top of the z-stack and the kernel fires
- * GUI_EVENT_MAXIMIZE on the owner queue so apps that resize on
- * maximise can rebuild their layout. Only the owner may restore its
- * own window.
+ * sys_window_restore: inverse of sys_window_minimize. The window raises to the
+ * top of the z-stack and the kernel fires GUI_EVENT_MAXIMIZE on the owner
+ * queue so apps that resize on maximise can rebuild their layout.
+ *
+ * Unlike minimize, restore is intentionally not owner-only: the panel/taskbar
+ * must be able to make another process's minimized window visible again after
+ * the user clicks its running-app slot. This matches sys_window_focus: it
+ * changes desktop presentation, not the owner's backing content.
  */
 static int64_t sys_window_restore(process_t *process, uint64_t window_id) {
-    gui_desktop_t *desktop;
+    gui_desktop_t *desktop = gui_desktop();
     gui_window_t *window;
-    int64_t status;
 
-    status = sys_owner_window(process, window_id, &desktop, &window);
-    if (status != 0) {
-        return status;
+    if (process == 0 || window_id >= GUI_MAX_WINDOWS) {
+        return ERR_INVAL;
+    }
+    if (desktop == 0) {
+        return ERR_AGAIN;
+    }
+    window = &desktop->windows[window_id];
+    if (window->used == 0) {
+        return ERR_NOENT;
     }
     if (gui_window_restore(desktop, (uint32_t)window_id) != 0) {
         return ERR_INVAL;
@@ -862,9 +878,13 @@ static int64_t sys_window_restore(process_t *process, uint64_t window_id) {
 }
 
 /*
- * sys_window_state: write a small bitmap of window flags into the
- * caller's 32-bit buffer. Lets apps (and the panel) check whether
- * a window is currently minimised without polling the event queue.
+ * sys_window_state: write a small bitmap of window flags into the caller's
+ * 32-bit buffer. Lets apps and the panel check whether a window is currently
+ * minimised without polling the owner event queue.
+ *
+ * This is also not owner-only. The taskbar needs read-only presentation state
+ * for windows it does not own so it can draw minimized slots and choose
+ * restore vs focus on click.
  *
  * Bit layout (matches GUI_WINDOW_STATE_* in kernel/gui.h):
  *   bit 0 = GUI_WINDOW_STATE_MINIMIZED
@@ -872,7 +892,7 @@ static int64_t sys_window_restore(process_t *process, uint64_t window_id) {
  */
 static int64_t sys_window_state(process_t *process, uint64_t window_id,
                                 uint64_t out_ptr) {
-    gui_desktop_t *desktop;
+    gui_desktop_t *desktop = gui_desktop();
     gui_window_t *window;
     uint32_t *out = (uint32_t *)(uintptr_t)out_ptr;
     uint32_t state = 0;
@@ -882,9 +902,15 @@ static int64_t sys_window_state(process_t *process, uint64_t window_id,
     if (status != 0) {
         return status;
     }
-    status = sys_owner_window(process, window_id, &desktop, &window);
-    if (status != 0) {
-        return status;
+    if (process == 0 || window_id >= GUI_MAX_WINDOWS) {
+        return ERR_INVAL;
+    }
+    if (desktop == 0) {
+        return ERR_AGAIN;
+    }
+    window = &desktop->windows[window_id];
+    if (window->used == 0) {
+        return ERR_NOENT;
     }
     if (window->minimized != 0U) {
         state |= 0x1U;
@@ -897,8 +923,8 @@ static int64_t sys_window_state(process_t *process, uint64_t window_id,
     return 0;
 }
 
-static int64_t sys_window_event(process_t *process, exception_frame_t *frame,
-                               uint64_t window_id, uint64_t buf_ptr,
+static int64_t sys_window_event(process_t *process, uint64_t window_id,
+                               uint64_t buf_ptr,
                                uint64_t buf_count) {
     gui_window_t *window;
     uint32_t *out = (uint32_t *)(uintptr_t)buf_ptr;
@@ -918,14 +944,8 @@ static int64_t sys_window_event(process_t *process, exception_frame_t *frame,
         return status;
     }
 
-    uint64_t yielded = 0;
-    while (window->event_count == 0) {
-        sys_yield_process(frame);
-        yielded++;
-        if (yielded > 256) {
-            /* Avoid spinning forever; yield back without an event. */
-            return ERR_AGAIN;
-        }
+    if (window->event_count == 0) {
+        return ERR_AGAIN;
     }
 
     uint64_t n = 0;
@@ -973,12 +993,17 @@ void syscall_dispatch(exception_frame_t *frame) {
     uart_pump_input();
     input_uart_poll();
     board_virtio_input_poll();
+    usb_hid_poll_all();
     if (frame->x[8] != SYS_READ) {
         input_event_t drain_event;
         while (input_queue_poll(&drain_event) == 0) {
             if (drain_event.type == INPUT_EVENT_KEY_PRESS) {
                 char c = (char)drain_event.data.key.key;
-                console_poll_char(c);
+                gui_desktop_t *desktop = gui_desktop();
+                if (desktop == 0 ||
+                    desktop->focused_window_id == GUI_NO_WINDOW) {
+                    console_poll_char(c);
+                }
                 (void)gui_handle_input(&drain_event);
             } else {
                 // Mouse move and button events get dispatched straight to
@@ -1094,8 +1119,8 @@ void syscall_dispatch(exception_frame_t *frame) {
                                                      frame->x[5]);
         break;
     case SYS_WINDOW_EVENT:
-        frame->x[0] = (uint64_t)sys_window_event(current, frame, frame->x[0],
-                                                frame->x[1], frame->x[2]);
+        frame->x[0] = (uint64_t)sys_window_event(current, frame->x[0],
+                                                 frame->x[1], frame->x[2]);
         break;
     case SYS_WINDOW_SET_TITLE:
         frame->x[0] = (uint64_t)sys_window_set_title(current, frame->x[0],

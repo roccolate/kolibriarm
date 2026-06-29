@@ -119,13 +119,15 @@ User apps live under `programs/apps/` and link against:
 - `programs/libkarm` for syscall trampolines, `crt0`, and small C helpers;
 - `programs/libkarmdesk` for GUI wrappers.
 
-Shipping apps are `panel`, `shell`, `editor`, `monitor`, and `clock`.
+Shipping apps are `panel`, `shell`, `editor`, `files`, `monitor`, and
+`clock`.
 
 ## Filesystems And Storage
 
-The VFS exposes bootfs, tmpfs, and FAT32 mounts. FAT32 parser/VFS behavior has
-host tests, and the QEMU storage integration path is checked by
-`make qemu-fs-test`.
+The VFS exposes bootfs, tmpfs, and FAT32 mounts. FAT32 root files can be opened
+dynamically through `/fat/<name>`, and `SYS_OPEN` supports `O_CREAT` for
+`/fat/<8.3-name>`. FAT32 parser/VFS behavior has host tests, and the QEMU
+storage integration path is checked by `make qemu-fs-test`.
 
 ## Coding Standards
 

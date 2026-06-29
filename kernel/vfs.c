@@ -135,6 +135,78 @@ static int vfs_write_result_valid(uint64_t offset, uint64_t requested,
     return 1;
 }
 
+static uint32_t vfs_open_access_mode(uint32_t flags) {
+    return flags & VFS_O_ACCMODE;
+}
+
+static int vfs_open_flags_valid(uint32_t flags) {
+    uint32_t mode = vfs_open_access_mode(flags);
+
+    if ((flags & ~(VFS_O_ACCMODE | VFS_O_CREAT)) != 0) {
+        return 0;
+    }
+
+    return mode == VFS_O_RDONLY || mode == VFS_O_WRONLY ||
+           mode == VFS_O_RDWR;
+}
+
+static int vfs_fat32_root_name(const char *path, char *out,
+                               uint64_t out_size) {
+    const char *suffix = vfs_strip_prefix(path, "/fat/");
+    uint64_t i;
+
+    if (suffix == 0 || out == 0 || out_size == 0) {
+        return -1;
+    }
+
+    for (i = 0; i + 1U < out_size; i++) {
+        char c = suffix[i];
+
+        if (c == '\0') {
+            break;
+        }
+        if (c == '/') {
+            return -1;
+        }
+        out[i] = c;
+    }
+
+    if (suffix[i] != '\0') {
+        return -1;
+    }
+    out[i] = '\0';
+    return i == 0 ? -1 : 0;
+}
+
+static const vfs_node_t *vfs_open_dynamic_fat32_node(const char *path,
+                                                     uint32_t flags) {
+    char name[VFS_MAX_PATH];
+    fat32_file_t file;
+    fat32_fs_t *fs;
+
+    if (vfs_fat32_root_name(path, name, sizeof(name)) != 0) {
+        return 0;
+    }
+
+    fs = fat32_default_fs();
+    if (fs == 0 || fs->mounted == 0) {
+        return 0;
+    }
+
+    if (fat32_open_root(fs, name, &file) != 0) {
+        if ((flags & VFS_O_CREAT) == 0 ||
+            fat32_create(fs, name, &file) != 0) {
+            return 0;
+        }
+    }
+
+    if (fat32_mount_vfs_file(fs, path, name) != 0) {
+        return 0;
+    }
+
+    return vfs_find(path);
+}
+
 void vfs_reset(void) {
     for (uint32_t i = 0; i < VFS_MAX_NODES; i++) {
         g_vfs_nodes[i].path = 0;
@@ -371,13 +443,20 @@ int vfs_list(const char *path, uint8_t *buffer, uint64_t capacity,
 
 int vfs_open_flags(const char *path, uint32_t flags) {
     const vfs_node_t *node = vfs_find(path);
+    uint32_t mode = vfs_open_access_mode(flags);
+
+    if (!vfs_open_flags_valid(flags)) {
+        return -1;
+    }
+
+    if (node == 0) {
+        node = vfs_open_dynamic_fat32_node(path, flags);
+    }
 
     if (node == 0 ||
-        (flags != VFS_O_RDONLY && flags != VFS_O_WRONLY &&
-         flags != VFS_O_RDWR) ||
-        ((flags == VFS_O_RDONLY || flags == VFS_O_RDWR) &&
+        ((mode == VFS_O_RDONLY || mode == VFS_O_RDWR) &&
          node->read == 0) ||
-        ((flags == VFS_O_WRONLY || flags == VFS_O_RDWR) &&
+        ((mode == VFS_O_WRONLY || mode == VFS_O_RDWR) &&
          node->write == 0)) {
         return -1;
     }
@@ -386,7 +465,7 @@ int vfs_open_flags(const char *path, uint32_t flags) {
         if (g_open_files[i].used == 0) {
             g_open_files[i].node = node;
             g_open_files[i].offset = 0;
-            g_open_files[i].flags = flags;
+            g_open_files[i].flags = mode;
             g_open_files[i].used = 1;
             return (int)i;
         }
@@ -493,54 +572,15 @@ int vfs_close(int fd) {
     return 0;
 }
 
-/*
- * vfs_unlink / vfs_rename dispatch. The kernel currently only
- * supports destructive filesystem operations on the FAT32 root
- * mounted at /fat/; tmpfs and bootfs reject the call with
- * ERR_NOENT because their mounts expose immutable paths.
- */
-static int vfs_fat32_basename(const char *path, char *out,
-                              uint64_t out_size) {
-    const char *slash;
-    uint64_t i;
-
-    if (path == 0 || out == 0 || out_size == 0) {
-        return -1;
-    }
-    slash = path;
-    for (const char *p = path; *p != '\0'; p++) {
-        if (*p == '/') {
-            slash = p + 1;
-        }
-    }
-    for (i = 0; i + 1U < out_size; i++) {
-        char c = slash[i];
-        if (c == '\0') {
-            break;
-        }
-        out[i] = c;
-    }
-    if (slash[i] != '\0') {
-        return -1;
-    }
-    out[i] = '\0';
-    return i == 0 ? -1 : 0;
-}
-
 int vfs_unlink(const char *path) {
     char name[VFS_MAX_PATH];
-    const char *fat_path;
     fat32_fs_t *fs;
 
-    fat_path = vfs_strip_prefix(path, "/fat/");
-    if (fat_path == 0) {
+    if (vfs_fat32_root_name(path, name, sizeof(name)) != 0) {
         return -1;
     }
     fs = fat32_default_fs();
     if (fs == 0 || fs->mounted == 0) {
-        return -1;
-    }
-    if (vfs_fat32_basename(fat_path, name, sizeof(name)) != 0) {
         return -1;
     }
     return fat32_delete(fs, name);
@@ -549,21 +589,14 @@ int vfs_unlink(const char *path) {
 int vfs_rename(const char *old_path, const char *new_path) {
     char old_name[VFS_MAX_PATH];
     char new_name[VFS_MAX_PATH];
-    const char *old_fat_path;
-    const char *new_fat_path;
     fat32_fs_t *fs;
 
-    old_fat_path = vfs_strip_prefix(old_path, "/fat/");
-    new_fat_path = vfs_strip_prefix(new_path, "/fat/");
-    if (old_fat_path == 0 || new_fat_path == 0) {
+    if (vfs_fat32_root_name(old_path, old_name, sizeof(old_name)) != 0 ||
+        vfs_fat32_root_name(new_path, new_name, sizeof(new_name)) != 0) {
         return -1;
     }
     fs = fat32_default_fs();
     if (fs == 0 || fs->mounted == 0) {
-        return -1;
-    }
-    if (vfs_fat32_basename(old_fat_path, old_name, sizeof(old_name)) != 0 ||
-        vfs_fat32_basename(new_fat_path, new_name, sizeof(new_name)) != 0) {
         return -1;
     }
     return fat32_rename(fs, old_name, new_name);

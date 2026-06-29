@@ -40,7 +40,7 @@ KERNEL_BIN := $(BUILD_DIR)/kernel.bin
 # 100 KB covers the libkarm-migrated apps plus the xHCI command/event
 # ring backend while keeping the kernel binary under a tight ceiling.
 KERNEL_SIZE_LIMIT ?= 100000
-APPS := shell editor monitor clock panel
+APPS := shell editor files monitor clock panel
 APPS_DIR := programs/apps
 APP_OBJS := $(addprefix $(BUILD_DIR)/$(APPS_DIR)/,$(addsuffix .o,$(APPS)))
 APP_HEADER_OBJS := $(addprefix $(BUILD_DIR)/$(APPS_DIR)/,$(addsuffix _header.o,$(APPS)))
@@ -73,6 +73,7 @@ LIBKARM_OBJS := \
 # use it; those bytes are copied into the embedded bootfs image.
 APP_LIBS_clock :=
 APP_LIBS_editor :=
+APP_LIBS_files :=
 APP_LIBS_monitor := $(LIBKARM_STRING_OBJ)
 APP_LIBS_panel :=
 APP_LIBS_shell := $(LIBKARM_STRING_OBJ)
@@ -181,7 +182,7 @@ help:
 	@printf "  %-18s %s\n" "qemu-blk" "run QEMU with a generated FAT32 virtio-blk image"
 	@printf "  %-18s %s\n" "qemu-fs-test" "smoke-test FAT32 storage wiring in QEMU"
 	@printf "  %-18s %s\n" "qemu-fb" "run QEMU headless with virtio-gpu"
-	@printf "  %-18s %s\n" "qemu-fb-visible" "run QEMU with visible virtio-gpu and mouse input"
+	@printf "  %-18s %s\n" "qemu-fb-visible" "run QEMU with visible virtio-gpu, USB keyboard, and virtio mouse"
 	@printf "  %-18s %s\n" "qemu-net" "run QEMU with virtio-net"
 	@printf "  %-18s %s\n" "qemu-usb" "run QEMU with xHCI USB keyboard and mouse"
 	@printf "  %-18s %s\n" "size" "print kernel ELF and binary size"
@@ -365,6 +366,8 @@ qemu-fb-visible: qemu-check entry-check $(KERNEL_BIN)
 	    -global virtio-mmio.force-legacy=false \
 	    -kernel $(KERNEL_BIN) \
 	    -device virtio-gpu-device,xres=640,yres=480 \
+	    -device qemu-xhci,id=xhci \
+	    -device usb-kbd,bus=xhci.0 \
 	    -device virtio-mouse-device
 
 qemu-debug: qemu-check entry-check $(KERNEL_BIN)

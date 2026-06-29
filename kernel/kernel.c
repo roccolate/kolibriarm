@@ -46,10 +46,17 @@ void kernel_main(uint64_t dtb_addr);
 
 static fat32_fs_t g_fat32_fs;
 
+static int desktop_has_keyboard_focus(void) {
+    gui_desktop_t *desktop = gui_desktop();
+
+    return desktop != 0 && desktop->focused_window_id != GUI_NO_WINDOW;
+}
+
 /*
  * Serial console input runs as a kernel thread after the scheduler starts.
- * It shares the input queue with the GUI path, so it peeks and consumes only
- * key presses; mouse and key-release events remain available to the desktop.
+ * It shares the input queue with the GUI path, so it only consumes key
+ * presses while no desktop window has keyboard focus. Once a user app is
+ * focused, keyboard events stay queued for the GUI.
  */
 static void console_input_thread(void *arg) {
     (void)arg;
@@ -59,11 +66,9 @@ static void console_input_thread(void *arg) {
         board_virtio_input_poll();
         usb_hid_poll_all();
 
-        /* The shell only consumes KEY_PRESS. Use peek so we do not
-         * pop MOUSE_MOVE / MOUSE_BUTTON events out from under the
-         * GUI input thread; those stay in the queue for poll_input_events. */
         input_event_t event;
-        while (input_queue_peek(&event) == 0) {
+        while (!desktop_has_keyboard_focus() &&
+               input_queue_peek(&event) == 0) {
             if (event.type == INPUT_EVENT_KEY_PRESS) {
                 (void)input_queue_poll(&event);
                 char c = (char)event.data.key.key;
@@ -336,6 +341,7 @@ static void poll_input_events(void) {
 /* Timer IRQ work that must happen even when no userspace thread is running. */
 void kernel_on_timer_tick(void) {
     board_virtio_input_poll();
+    usb_hid_poll_all();
     poll_input_events();
     net_poll();
 }

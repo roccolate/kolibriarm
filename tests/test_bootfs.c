@@ -8,6 +8,8 @@ extern char __app_shell_start[];
 extern char __app_shell_end[];
 extern char __app_editor_start[];
 extern char __app_editor_end[];
+extern char __app_files_start[];
+extern char __app_files_end[];
 extern char __app_monitor_start[];
 extern char __app_monitor_end[];
 extern char __app_panel_start[];
@@ -29,6 +31,7 @@ void test_bootfs_find_existing_file_metadata(void) {
 void test_bootfs_find_returns_each_registered_app(void) {
     TEST_ASSERT_NOT_NULL(bootfs_find("shell"));
     TEST_ASSERT_NOT_NULL(bootfs_find("editor"));
+    TEST_ASSERT_NOT_NULL(bootfs_find("files"));
     TEST_ASSERT_NOT_NULL(bootfs_find("monitor"));
     TEST_ASSERT_NOT_NULL(bootfs_find("clock"));
 }
@@ -187,6 +190,7 @@ void test_bootfs_mount_vfs_exposes_remaining_app_paths(void) {
 
     TEST_ASSERT_NOT_NULL(vfs_find("/armonios/monitor"));
     TEST_ASSERT_NOT_NULL(vfs_find("/armonios/clock"));
+    TEST_ASSERT_NOT_NULL(vfs_find("/armonios/files"));
 }
 
 void test_bootfs_mount_vfs_reads_editor_through_vfs(void) {
@@ -245,6 +249,7 @@ void test_bootfs_find_results_survive_later_lookups(void) {
     editor_size = editor->size;
 
     TEST_ASSERT_NOT_NULL(bootfs_find("panel"));
+    TEST_ASSERT_NOT_NULL(bootfs_find("files"));
     TEST_ASSERT_NOT_NULL(bootfs_find("clock"));
 
     TEST_ASSERT_EQUAL_UINT64('e', editor->name[0]);

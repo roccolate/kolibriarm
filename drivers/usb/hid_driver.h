@@ -36,6 +36,7 @@ typedef struct {
     uint16_t max_packet;
     usb_device_t usb_device;
     uint8_t prev_keys[6]; /* Last keyboard report's keycodes */
+    uint8_t release_pending[6]; /* Debounce transient empty keyboard reports */
     uint8_t prev_buttons; /* Last mouse report's button byte */
 } usb_hid_device_t;
 

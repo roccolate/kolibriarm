@@ -19,6 +19,7 @@
 
 #define O_RDONLY        0
 #define O_RDWR          2
+#define O_CREAT      0x40
 #define WIN_X          96
 #define WIN_Y          72
 #define WIN_W         420
@@ -27,7 +28,8 @@
 #define FILE_CAP      512
 #define RENDER_COLS   128
 #define EVENT_CAP       8
-#define PATH_CAP       16
+#define PATH_CAP       32
+#define STATUS_CAP     48
 
 #define COLOR_BG        0xff202830U
 #define COLOR_BORDER    0xff808080U
@@ -35,13 +37,17 @@
 #define COLOR_TEXT      0xffe0e8f0U
 #define COLOR_CARET     0xffe0e8f0U
 
-static void copy_path(char *out, const char *src) {
+static void copy_cstr(char *out, size_t out_size, const char *src) {
     size_t i = 0;
-    while (i + 1 < (size_t)PATH_CAP && src[i] != '\0') {
+    while (i + 1 < out_size && src[i] != '\0') {
         out[i] = src[i];
         i++;
     }
     out[i] = '\0';
+}
+
+static void copy_path(char *out, const char *src) {
+    copy_cstr(out, PATH_CAP, src);
 }
 
 static void resolve_path(int argc, char **argv, char *out) {
@@ -52,28 +58,46 @@ static void resolve_path(int argc, char **argv, char *out) {
     copy_path(out, "/tmp/note");
 }
 
-static size_t load_note(const char *path, char *buf, size_t cap) {
-    long fd = kli_open(path, O_RDONLY);
+static int is_fat_path(const char *path) {
+    static const char prefix[] = "/fat/";
+    size_t i = 0;
+
+    while (prefix[i] != '\0') {
+        if (path[i] != prefix[i]) {
+            return 0;
+        }
+        i++;
+    }
+    return path[i] != '\0';
+}
+
+static long load_note(const char *path, char *buf, size_t cap) {
+    long flags = is_fat_path(path) ? (O_RDWR | O_CREAT) : O_RDONLY;
+    long fd = kli_open(path, flags);
     if (fd < 0) {
-        return 0;
+        return -1;
     }
     long n = kli_read((int)fd, buf, cap - 1);
     (void)kli_close((int)fd);
     if (n < 0) {
-        return 0;
+        return -1;
     }
     buf[n] = '\0';
-    return (size_t)n;
+    return n;
 }
 
-static void save_note(const char *path, const char *buf, size_t len) {
-    long fd = kli_open(path, O_RDWR);
+static int save_note(const char *path, const char *buf, size_t len) {
+    long flags = is_fat_path(path) ? (O_RDWR | O_CREAT) : O_RDWR;
+    long fd = kli_open(path, flags);
+    long written;
+
     if (fd < 0) {
-        return;
+        return -1;
     }
     (void)kli_seek((int)fd, 0, 0);
-    (void)kli_write((int)fd, buf, len);
+    written = kli_write((int)fd, buf, len);
     (void)kli_close((int)fd);
+    return written == (long)len ? 0 : -1;
 }
 
 // Editor state. The mutable file buffer lives in anonymous user memory
@@ -87,6 +111,7 @@ typedef struct {
     char   file[FILE_CAP];
     size_t file_len;
     size_t caret;
+    char   status[STATUS_CAP];
 } editor_state_t;
 
 static void editor_init(editor_state_t *e) {
@@ -95,17 +120,30 @@ static void editor_init(editor_state_t *e) {
     }
     e->file_len = 0;
     e->caret = 0;
+    e->status[0] = '\0';
 }
 
 static void editor_load(editor_state_t *e, const char *path) {
-    e->file_len = load_note(path, e->file, sizeof(e->file));
+    long loaded = load_note(path, e->file, sizeof(e->file));
+    if (loaded < 0) {
+        e->file_len = 0;
+        e->file[0] = '\0';
+        copy_cstr(e->status, sizeof(e->status), "OPEN FAILED");
+    } else {
+        e->file_len = (size_t)loaded;
+        copy_cstr(e->status, sizeof(e->status), "OPENED");
+    }
     if (e->caret > e->file_len) {
         e->caret = e->file_len;
     }
 }
 
-static void editor_save(const editor_state_t *e, const char *path) {
-    save_note(path, e->file, e->file_len);
+static void editor_save(editor_state_t *e, const char *path) {
+    if (save_note(path, e->file, e->file_len) == 0) {
+        copy_cstr(e->status, sizeof(e->status), "SAVED");
+    } else {
+        copy_cstr(e->status, sizeof(e->status), "SAVE FAILED");
+    }
 }
 
 // Find the start of the line containing `caret`. Lines are split by
@@ -230,40 +268,40 @@ static size_t editor_draw_line(long wid, const editor_state_t *e,
     }
     out[i] = '\0';
 
-    (void)gui_window_draw_text(wid, 12, 28, COLOR_TEXT, out);
+    (void)gui_window_draw_text(wid, 12, 58, COLOR_TEXT, out);
     // 2x8 caret block. Two pixels wide is enough to read on the 8x8
     // font and tall enough to span the glyph.
-    (void)gui_window_draw_rect(wid, 12 + (long)col * 8, 28, 2, 8,
+    (void)gui_window_draw_rect(wid, 12 + (long)col * 8, 58, 2, 8,
                                COLOR_CARET);
     return col;
 }
 
-static void redraw(long wid, const editor_state_t *e, int argc,
-                   char **argv, char *render) {
+static void append_text(char *out, size_t out_size, size_t *cursor,
+                        const char *text) {
+    while (*cursor + 1 < out_size && *text != '\0') {
+        out[*cursor] = *text;
+        (*cursor)++;
+        text++;
+    }
+    out[*cursor] = '\0';
+}
+
+static void redraw(long wid, const editor_state_t *e, const char *path,
+                   char *render) {
     (void)gui_window_draw_rect(wid, 1, 0, WIN_W - 2,
                                WIN_H - TITLE_BAR_H - 2, COLOR_BG);
     (void)gui_window_draw_text(wid, 12, 8, COLOR_STATUS,
                                "CTRL S SAVE CTRL Q CLOSE");
 
-    if (argc > 1) {
-        size_t i = 0;
-        const char *prefix = "ARGV: ";
-        while (prefix[i] != '\0' && i + 1 < RENDER_COLS) {
-            render[i] = prefix[i];
-            i++;
-        }
-        for (int a = 0; a < argc && i + 1 < RENDER_COLS; a++) {
-            if (i + 1 < RENDER_COLS) {
-                render[i++] = ' ';
-            }
-            const char *s = (a < argc && argv[a] != 0) ? argv[a] : "";
-            for (size_t k = 0; s[k] != '\0' && i + 1 < RENDER_COLS; k++) {
-                render[i++] = s[k];
-            }
-        }
-        render[i] = '\0';
-        (void)gui_window_draw_text(wid, 12, 22, COLOR_STATUS, render);
-    }
+    size_t i = 0;
+    append_text(render, RENDER_COLS, &i, "PATH ");
+    append_text(render, RENDER_COLS, &i, path);
+    (void)gui_window_draw_text(wid, 12, 22, COLOR_STATUS, render);
+
+    i = 0;
+    append_text(render, RENDER_COLS, &i, "STATE ");
+    append_text(render, RENDER_COLS, &i, e->status);
+    (void)gui_window_draw_text(wid, 12, 38, COLOR_STATUS, render);
 
     (void)editor_draw_line(wid, e, render, RENDER_COLS);
 
@@ -318,7 +356,7 @@ int main(int argc, char **argv) {
     }
     (void)gui_window_set_title(wid, "editor", TITLE_BAR_H);
 
-    redraw(wid, e, argc, argv, render);
+    redraw(wid, e, path, render);
 
     for (;;) {
         long n = gui_window_event(wid, events, EVENT_CAP);
@@ -339,6 +377,7 @@ int main(int argc, char **argv) {
                 }
                 if (key == 19) {
                     editor_save(e, path);
+                    dirty = 1;
                 } else if (key == INPUT_KEY_LEFT) {
                     editor_left(e);
                     dirty = 1;
@@ -353,20 +392,23 @@ int main(int argc, char **argv) {
                     dirty = 1;
                 } else if (key == 8 || key == 127) {
                     if (editor_backspace(e) == 0) {
+                        copy_cstr(e->status, sizeof(e->status), "MODIFIED");
                         dirty = 1;
                     }
                 } else if (key == 13 || key == 10) {
                     if (editor_insert(e, '\n') == 0) {
+                        copy_cstr(e->status, sizeof(e->status), "MODIFIED");
                         dirty = 1;
                     }
                 } else if (key >= 32 && key <= 126) {
                     if (editor_insert(e, (char)key) == 0) {
+                        copy_cstr(e->status, sizeof(e->status), "MODIFIED");
                         dirty = 1;
                     }
                 }
             }
             if (dirty) {
-                redraw(wid, e, argc, argv, render);
+                redraw(wid, e, path, render);
             }
         } else {
             (void)kli_yield();

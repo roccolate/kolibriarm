@@ -152,16 +152,17 @@ static inline long gui_window_minimize(long window_id) {
     return __syscall1(SYS_WINDOW_MINIMIZE, window_id);
 }
 
-// gui_window_restore: owner-only; inverse of gui_window_minimize.
-// Clears the hidden flag, raises the window, and pushes
+// gui_window_restore: inverse of gui_window_minimize. This is intentionally
+// callable by the panel for another process's minimized window, just like
+// gui_window_focus. It clears the hidden flag, raises the window, and pushes
 // GUI_EVENT_MAXIMIZE so apps that resize on maximise can rebuild.
 static inline long gui_window_restore(long window_id) {
     return __syscall1(SYS_WINDOW_RESTORE, window_id);
 }
 
-// gui_window_state: owner-only; writes a 32-bit state bitmap into
-// out_ptr. Bit 0 = GUI_WINDOW_STATE_MINIMIZED, bit 1 =
-// GUI_WINDOW_STATE_FOCUSED.
+// gui_window_state: writes a 32-bit state bitmap into out_ptr. Read-only
+// presentation state is visible to the panel so it can draw taskbar slots.
+// Bit 0 = GUI_WINDOW_STATE_MINIMIZED, bit 1 = GUI_WINDOW_STATE_FOCUSED.
 static inline long gui_window_state(long window_id, uint32_t *out_ptr) {
     return __syscall2(SYS_WINDOW_STATE, window_id, (long)(uintptr_t)out_ptr);
 }

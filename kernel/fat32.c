@@ -18,7 +18,7 @@
 #define FAT32_CLUSTER_MASK   0x0fffffffU
 #define FAT32_CLUSTER_EOC    0x0ffffff8U
 #define FAT32_CLUSTER_BAD    0x0ffffff7U
-#define FAT32_MAX_VFS_FILES  4U
+#define FAT32_MAX_VFS_FILES  8U
 
 typedef struct {
     fat32_fs_t *fs;

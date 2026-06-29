@@ -65,11 +65,40 @@ uint8_t usb_hid_add_device(usb_hid_state_t *state,
         dev->max_packet = ep->max_packet;
         for (uint8_t k = 0; k < 6U; k++) {
             dev->prev_keys[k] = HID_KEY_NONE;
+            dev->release_pending[k] = 0;
         }
         dev->prev_buttons = 0;
         added++;
     }
     return added;
+}
+
+static uint8_t key_in_report(const hid_boot_keyboard_report_t *report,
+                             uint8_t key) {
+    for (uint8_t i = 0; i < 6U; i++) {
+        if (report->keys[i] == key) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int8_t key_slot(const usb_hid_device_t *dev, uint8_t key) {
+    for (uint8_t i = 0; i < 6U; i++) {
+        if (dev->prev_keys[i] == key) {
+            return (int8_t)i;
+        }
+    }
+    return -1;
+}
+
+static int8_t empty_key_slot(const usb_hid_device_t *dev) {
+    for (uint8_t i = 0; i < 6U; i++) {
+        if (dev->prev_keys[i] == HID_KEY_NONE) {
+            return (int8_t)i;
+        }
+    }
+    return -1;
 }
 
 uint8_t usb_hid_keyboard_report(usb_hid_device_t *dev,
@@ -79,28 +108,33 @@ uint8_t usb_hid_keyboard_report(usb_hid_device_t *dev,
         return 0;
     }
     uint8_t produced = 0;
-    /* Releases: any code in prev_keys that's missing from the new
-     * report is released. */
+    /*
+     * Releases are debounced by one empty report. QEMU's usb-kbd can present
+     * very short empty gaps while the host is still repeating a held key; if we
+     * clear prev_keys immediately, the next identical report becomes another
+     * KEY_PRESS and userland sees "aaaa..." from a single long press.
+     */
     for (uint8_t i = 0; i < 6U; i++) {
         uint8_t prev = dev->prev_keys[i];
         if (prev == HID_KEY_NONE) {
             continue;
         }
-        uint8_t present = 0;
-        for (uint8_t j = 0; j < 6U; j++) {
-            if (report->keys[j] == prev) {
-                present = 1;
-                break;
-            }
+        if (key_in_report(report, prev)) {
+            dev->release_pending[i] = 0;
+            continue;
         }
-        if (!present) {
-            out[produced].type = INPUT_EVENT_KEY_RELEASE;
-            out[produced].data.key.key = hid_usage_to_ascii(prev, 0);
-            produced++;
-            dev->prev_keys[i] = HID_KEY_NONE;
-            if (produced >= out_len) {
-                return produced;
-            }
+        if (dev->release_pending[i] == 0) {
+            dev->release_pending[i] = 1;
+            continue;
+        }
+
+        out[produced].type = INPUT_EVENT_KEY_RELEASE;
+        out[produced].data.key.key = hid_usage_to_ascii(prev, 0);
+        produced++;
+        dev->prev_keys[i] = HID_KEY_NONE;
+        dev->release_pending[i] = 0;
+        if (produced >= out_len) {
+            return produced;
         }
     }
     /* Presses: any code in the new report not seen in prev_keys. */
@@ -109,25 +143,24 @@ uint8_t usb_hid_keyboard_report(usb_hid_device_t *dev,
         if (cur == HID_KEY_NONE) {
             continue;
         }
-        uint8_t seen = 0;
-        for (uint8_t j = 0; j < 6U; j++) {
-            if (dev->prev_keys[j] == cur) {
-                seen = 1;
-                break;
-            }
+        int8_t seen_slot = key_slot(dev, cur);
+        if (seen_slot >= 0) {
+            dev->release_pending[(uint8_t)seen_slot] = 0;
+            continue;
         }
-        if (!seen) {
-            out[produced].type = INPUT_EVENT_KEY_PRESS;
-            out[produced].data.key.key = hid_usage_to_ascii(cur, 0);
-            produced++;
-            if (produced >= out_len) {
-                return produced;
-            }
+
+        int8_t slot = empty_key_slot(dev);
+        if (slot < 0) {
+            continue;
         }
-    }
-    /* Update prev_keys to the new report. */
-    for (uint8_t i = 0; i < 6U; i++) {
-        dev->prev_keys[i] = report->keys[i];
+        dev->prev_keys[(uint8_t)slot] = cur;
+        dev->release_pending[(uint8_t)slot] = 0;
+        out[produced].type = INPUT_EVENT_KEY_PRESS;
+        out[produced].data.key.key = hid_usage_to_ascii(cur, 0);
+        produced++;
+        if (produced >= out_len) {
+            return produced;
+        }
     }
     return produced;
 }
@@ -232,6 +265,7 @@ void usb_hid_state_reset(void) {
     for (uint8_t i = 0; i < USB_HID_MAX_DEVICES; i++) {
         for (uint8_t k = 0; k < 6; k++) {
             g_usb_hid_state.devices[i].prev_keys[k] = HID_KEY_NONE;
+            g_usb_hid_state.devices[i].release_pending[k] = 0;
         }
         g_usb_hid_state.devices[i].prev_buttons = 0;
         g_usb_hid_state.devices[i].endpoint_in = 0;

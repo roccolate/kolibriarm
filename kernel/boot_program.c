@@ -17,6 +17,8 @@ extern char __app_shell_start[];
 extern char __app_shell_end[];
 extern char __app_editor_start[];
 extern char __app_editor_end[];
+extern char __app_files_start[];
+extern char __app_files_end[];
 extern char __app_monitor_start[];
 extern char __app_monitor_end[];
 extern char __app_panel_start[];
@@ -43,6 +45,11 @@ static const boot_program_source_t g_boot_programs[] = {
         .name = "editor",
         .image_start = (const uint8_t *)(const void *)__app_editor_start,
         .image_end = (const uint8_t *)(const void *)__app_editor_end,
+    },
+    {
+        .name = "files",
+        .image_start = (const uint8_t *)(const void *)__app_files_start,
+        .image_end = (const uint8_t *)(const void *)__app_files_end,
     },
     {
         .name = "monitor",

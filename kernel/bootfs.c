@@ -21,6 +21,7 @@ typedef struct {
 static const bootfs_entry_t g_bootfs_entries[] = {
     { "shell", "/armonios/shell" },
     { "editor", "/armonios/editor" },
+    { "files", "/armonios/files" },
     { "monitor", "/armonios/monitor" },
     { "panel", "/armonios/panel" },
     { "clock", "/armonios/clock" },

@@ -109,8 +109,10 @@ Current file descriptors:
 Notes:
 - `sys_read(0, buf, len)` reads at most one UART byte. It returns `ERR_AGAIN`
   when no byte is available.
-- `sys_open` accepts `flags=0` (`O_RDONLY`), `flags=1` (`O_WRONLY`), and
-  `flags=2` (`O_RDWR`).
+- `sys_open` accepts access mode bits `0` (`O_RDONLY`), `1` (`O_WRONLY`),
+  and `2` (`O_RDWR`). It also accepts `O_CREAT` (`0x40`) combined with one
+  access mode. `O_CREAT` is currently supported only for `/fat/<8.3-name>`
+  root files; other paths reject create.
 - `sys_read`, `sys_write`, `sys_seek`, and `sys_close` on VFS file descriptors
   are backed by the fixed kernel VFS descriptor table.
 - `sys_seek` currently supports only `whence=0` (`SEEK_SET`).
@@ -161,8 +163,8 @@ Current limitations:
 | 81 | `sys_window_get_bounds` | `x0=window_id, x1=out_ptr` | 0 / error | Copy the window's `(x, y, w, h)` into the caller's 16-byte buffer as four `uint32_t` values; only the owner may read another process's window bounds |
 | 82 | `sys_window_set_bounds` | `x0=window_id, x1=x, x2=y, x3=w, x4=h` | 0 / error | Move and/or resize the window in one step; if `(w, h)` changes the kernel reallocates the per-window backing and pushes `GUI_EVENT_RESIZE` onto the owner's event queue |
 | 83 | `sys_window_minimize` | `x0=window_id` | 0 / error | Owner-only: hide the window through the same path the kernel-drawn minimize button uses; pushes `GUI_EVENT_MINIMIZE` onto the owner's queue |
-| 84 | `sys_window_restore` | `x0=window_id` | 0 / error | Owner-only: inverse of `sys_window_minimize`; clears the hidden flag, raises the window, and pushes `GUI_EVENT_MAXIMIZE` |
-| 85 | `sys_window_state` | `x0=window_id, x1=out_ptr` | 0 / error | Owner-only: write a 32-bit state bitmap into the caller's buffer; bit 0 = minimized, bit 1 = currently focused |
+| 84 | `sys_window_restore` | `x0=window_id` | 0 / error | Presentation operation: clears the hidden flag, raises the window, and pushes `GUI_EVENT_MAXIMIZE`; callable by the panel for taskbar restore |
+| 85 | `sys_window_state` | `x0=window_id, x1=out_ptr` | 0 / error | Read-only presentation query: write a 32-bit state bitmap into the caller's buffer; bit 0 = minimized, bit 1 = currently focused |
 | 86 | `sys_cursor_register_region` | `x0=window_id, x1=slot, x2=x, x3=y, x4=w, x5=h, x6=shape` | 0 / error | Owner-only: install or replace a per-window cursor-shape region. Slot 0..7; the kernel walks the slots in ascending order during cursor refresh and the first region whose content-local rect contains the cursor wins over the kernel title-bar default. Pass `x6=0xffffffff` to clear the slot. |
 
 Current limitations:
@@ -170,9 +172,10 @@ Current limitations:
   must be appended with new syscall numbers; existing numbers and argument
   registers must not be reused.
 - Window ownership is enforced with the current process pid for draw,
-  destroy, and set-title. `sys_window_focus` and `sys_window_for_pid`
-  are deliberately callable from any pid so the desktop taskbar (a
-  different pid from the apps it tracks) can raise their windows.
+  destroy, minimize, and set-title. `sys_window_focus`, `sys_window_restore`,
+  `sys_window_state`, and `sys_window_for_pid` are deliberately callable from
+  any pid so the desktop taskbar (a different pid from the apps it tracks) can
+  draw minimized state, restore minimized windows, and raise their windows.
 - `sys_window_event` writes packed `gui_event_t` triples:
   `uint32_t type, int32_t data1, int32_t data2`.
 - `sys_window_event` yields for a bounded number of scheduler turns and returns
@@ -258,9 +261,10 @@ contract below is enforced by the `kernel/gui_*` modules and pinned by
   only owner value `sys_window_for_pid` skips.
 - `sys_window_create` and `sys_window_destroy` are owner-only: a process
   cannot draw into or destroy a window it does not own.
-- `sys_window_focus` and `sys_window_for_pid` are intentionally
-  callable from any pid. The panel taskbar uses them to raise a
-  different pid's window.
+- `sys_window_focus`, `sys_window_restore`, `sys_window_state`, and
+  `sys_window_for_pid` are intentionally callable from any pid. The panel
+  taskbar uses them to draw state, restore, and raise a different pid's
+  window.
 - `gui_event_t` is a packed 12-byte triple: `uint32_t type,
   int32_t data1, int32_t data2` (4 bytes each). The width and the
   order are part of the ABI; apps size their event buffers as
@@ -347,12 +351,8 @@ Planned standard file descriptors:
 2  stderr  terminal/display or UART debug channel
 ```
 
-Planned `open` flags:
+Planned additional `open` flags:
 ```
-0x00  O_RDONLY
-0x01  O_WRONLY
-0x02  O_RDWR
-0x40  O_CREAT
 0x200 O_TRUNC
 0x400 O_APPEND
 ```

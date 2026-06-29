@@ -3,13 +3,16 @@
 
 #include <stdint.h>
 
-#define VFS_MAX_NODES 16U
+#define VFS_MAX_NODES 24U
 #define VFS_MAX_OPEN_FILES 8U
 #define VFS_MAX_PATH 64U
 
-#define VFS_O_RDONLY 0U
-#define VFS_O_WRONLY 1U
-#define VFS_O_RDWR   2U
+#define VFS_O_RDONLY  0U
+#define VFS_O_WRONLY  1U
+#define VFS_O_RDWR    2U
+#define VFS_O_ACCMODE 3U
+#define VFS_O_CREAT   0x40U
+#define VFS_O_ALLOWED (VFS_O_ACCMODE | VFS_O_CREAT)
 
 /*
  * Fixed-table kernel VFS facade.

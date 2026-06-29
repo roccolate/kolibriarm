@@ -8,6 +8,8 @@ extern char __app_shell_start[];
 extern char __app_shell_end[];
 extern char __app_editor_start[];
 extern char __app_editor_end[];
+extern char __app_files_start[];
+extern char __app_files_end[];
 extern char __app_monitor_start[];
 extern char __app_monitor_end[];
 extern char __app_panel_start[];
@@ -42,6 +44,20 @@ __asm__(
     ".skip 56\n"
     ".global __app_editor_end\n"
     "__app_editor_end:\n"
+
+    ".section .app_files_blob, \"a\"\n"
+    ".balign 8\n"
+    ".global __app_files_start\n"
+    "__app_files_start:\n"
+    ".long 0x31494c4b\n"
+    ".short 80\n"
+    ".short 1\n"
+    ".quad 84\n"
+    ".quad 80\n"
+    ".byte 0x66, 0x69, 0x6c, 0x65\n"
+    ".skip 56\n"
+    ".global __app_files_end\n"
+    "__app_files_end:\n"
 
     ".section .app_monitor_blob, \"a\"\n"
     ".balign 8\n"
@@ -150,6 +166,7 @@ void test_boot_program_find_resolves_editor_and_panel(void) {
 }
 
 void test_boot_program_find_resolves_remaining_registered_apps(void) {
+    TEST_ASSERT_NOT_NULL(boot_program_find("files"));
     TEST_ASSERT_NOT_NULL(boot_program_find("monitor"));
     TEST_ASSERT_NOT_NULL(boot_program_find("clock"));
 }
@@ -191,6 +208,7 @@ static void assert_boot_program_kli1_header(const char *name) {
 void test_boot_program_registered_apps_have_canonical_kli1_headers(void) {
     assert_boot_program_kli1_header("shell");
     assert_boot_program_kli1_header("editor");
+    assert_boot_program_kli1_header("files");
     assert_boot_program_kli1_header("monitor");
     assert_boot_program_kli1_header("panel");
     assert_boot_program_kli1_header("clock");
@@ -222,6 +240,7 @@ void test_boot_program_find_results_survive_later_lookups(void) {
     editor_size = editor->size;
 
     TEST_ASSERT_NOT_NULL(boot_program_find("panel"));
+    TEST_ASSERT_NOT_NULL(boot_program_find("files"));
     TEST_ASSERT_NOT_NULL(boot_program_find("clock"));
 
     TEST_ASSERT_EQUAL_UINT64('e', editor->name[0]);

@@ -7,7 +7,7 @@ Historical cleanup details live in `TECH_DEBT_REVIEW.md`.
 
 - Current version target: **v0.9 QEMU desktop baseline**.
 - Next version target: **v1.0 stable/debugged QEMU kernel + desktop release**.
-- Last verified kernel size: `kernel.bin: 85840 bytes (limit: 100000)`.
+- Last verified kernel size: `kernel.bin: 92696 bytes (limit: 100000)`.
 - Standard checks for kernel, driver, boot, and ABI changes are `make`,
   `make size`, and `make -C tests test`.
 - Targeted runtime checks include `make qemu-fs-test`,
@@ -29,11 +29,21 @@ Historical cleanup details live in `TECH_DEBT_REVIEW.md`.
 ## Userland
 
 - Shipping apps are C programs under `programs/apps/`: `panel`, `shell`,
-  `editor`, `monitor`, and `clock`.
+  `editor`, `files`, `monitor`, and `clock`.
 - Apps link against `programs/libkarm` and `programs/libkarmdesk`.
 - Userland syscall output helpers are centralized through the small
   `kli_write_cstr()` instead of per-app `write_cstr` copies.
 - App images use the KLI1 flat format and are embedded in bootfs.
+- The panel launcher row is `shell`, `editor`, `files`, `monitor`, `clock`;
+  nested panel launches are intentionally not exposed, and clicking an already
+  running app restores/focuses it instead of spawning a duplicate.
+- The shell supports simple fixed-buffer commands, including `pwd`, `cd`,
+  cwd-relative `ls`, and `cat`.
+- The editor shows its active path and open/save status, and can create FAT32
+  root files when editing `/fat/<name>`.
+- The `files` app lists `/fat`, opens the selected file in editor, creates
+  8.3 root files, renames files, deletes files after confirmation, and exits
+  through Ctrl-Q or the close button.
 - When `make qemu-blk` or `make qemu-fs-test` provides the generated FAT32
   virtio-blk disk, the kernel can select FAT32-backed app images through VFS.
 - `make stack-check` measures per-function userland C stack usage; the current
@@ -67,6 +77,10 @@ Historical cleanup details live in `TECH_DEBT_REVIEW.md`.
   scratch space out of the polling thread stack.
 - FAT32 parser/VFS behavior has host tests, and the storage integration path is
   covered by `make qemu-fs-test`.
+- `SYS_OPEN` accepts access mode bits plus `O_CREAT = 0x40`; creation is
+  currently supported only for FAT32 root files under `/fat/<8.3-name>`.
+- Dynamic `/fat/<name>` opens mount FAT32 root files on demand instead of
+  requiring every file to be pre-mounted during boot.
 
 ## Syscalls And ABI
 
@@ -78,11 +92,31 @@ Historical cleanup details live in `TECH_DEBT_REVIEW.md`.
 - `tests/test_syscall_abi.c` and `tests/test_window_abi.c` pin the ABI details
   that apps depend on.
 
+## Security Baseline
+
+ArmoniOS currently targets a single-user, hardened QEMU desktop baseline. It
+does provide:
+
+- EL0 apps isolated from the EL1 kernel;
+- per-process user page tables and tracked user regions;
+- syscall user-pointer validation through shared helpers;
+- owner checks for window operations that mutate another process's window;
+- cleanup of process-owned PMM pages and GUI resources on process release.
+
+It does not yet claim:
+
+- multi-user accounts;
+- file permissions;
+- capabilities;
+- signed or trusted app policy;
+- a complete sandbox model for malicious user programs.
+
 ## Next Engineering Focus
 
-- Next: continue v1.1 app UX polish and keep new syscall callsites behind
-  `libkarm` / `libkarmdesk`, then rerun the v1.0 QEMU stability sweep.
-- Later: GUI size work if `kernel.bin` pressure returns, and xHCI cleanup only
+- Next: run the desktop-core gates after the `files` / `O_CREAT` pass, then
+  decide whether this behavior is part of v1.0 or a later label.
+- Later: minimal userland-only engine helpers after the desktop-core flow is
+  stable; GUI size work if `kernel.bin` pressure returns; xHCI cleanup only
   with USB runtime checks.
 
 ## Known Product Gaps

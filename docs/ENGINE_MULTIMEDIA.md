@@ -51,7 +51,7 @@ This prerequisite is complete enough for the multimedia plan:
   freestanding C helpers.
 - `programs/libkarmdesk/` provides app-facing desktop/window wrappers.
 - Shipping apps are C programs under `programs/apps/`: panel, shell, editor,
-  monitor, and clock.
+  files, monitor, and clock.
 - The app linker script emits KLI1 flat images consumed by the current loader.
 - Kernel low-level entry code, exception vectors, context switching, EL0 entry,
   and `crt0.S` remain assembly.

@@ -439,6 +439,104 @@ void test_fat32_mount_vfs_file_writes_through_vfs(void) {
     TEST_ASSERT_EQUAL_UINT64(sizeof(input), stat.size);
 }
 
+void test_fat32_vfs_open_mounts_existing_root_file_dynamically(void) {
+    test_fat32_disk_t disk;
+    fat32_fs_t fs;
+    uint8_t output[6] = { 0 };
+    uint64_t count = 99;
+    int fd;
+
+    test_setup_fat32_disk(&disk);
+    vfs_reset();
+    fat32_vfs_reset();
+
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)fat32_mount(
+                                  &fs, test_disk_read_sector, &disk));
+
+    fd = vfs_open_flags("/fat/hello.txt", VFS_O_RDONLY);
+    TEST_ASSERT_TRUE(fd >= 0);
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)vfs_seek(fd,
+                                                FAT32_SECTOR_SIZE - 6U));
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)vfs_read_fd(fd, output,
+                                                   sizeof(output), &count));
+    TEST_ASSERT_EQUAL_UINT64(sizeof(output), count);
+    TEST_ASSERT_EQUAL_UINT64('H', output[0]);
+    TEST_ASSERT_EQUAL_UINT64('e', output[1]);
+    TEST_ASSERT_EQUAL_UINT64('l', output[2]);
+    TEST_ASSERT_EQUAL_UINT64('l', output[3]);
+    TEST_ASSERT_EQUAL_UINT64('o', output[4]);
+    TEST_ASSERT_EQUAL_UINT64(' ', output[5]);
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)vfs_close(fd));
+}
+
+void test_fat32_vfs_open_create_makes_missing_root_file(void) {
+    test_fat32_disk_t disk;
+    fat32_fs_t fs;
+    fat32_file_t file;
+    uint8_t input[] = { 'n', 'e', 'w' };
+    uint8_t output[4] = { 0 };
+    uint64_t count = 99;
+    int fd;
+
+    test_setup_fat32_disk(&disk);
+    vfs_reset();
+    fat32_vfs_reset();
+
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)fat32_mount(
+                                  &fs, test_disk_read_sector, &disk));
+    fat32_set_write_sector(&fs, test_disk_write_sector);
+
+    fd = vfs_open_flags("/fat/note.txt", VFS_O_RDWR | VFS_O_CREAT);
+    TEST_ASSERT_TRUE(fd >= 0);
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)vfs_write_fd(fd, input,
+                                                    sizeof(input), &count));
+    TEST_ASSERT_EQUAL_UINT64(sizeof(input), count);
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)vfs_close(fd));
+
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)fat32_open_root(&fs, "NOTE.TXT",
+                                                       &file));
+    TEST_ASSERT_EQUAL_UINT64(sizeof(input), file.size);
+    TEST_ASSERT_EQUAL_UINT64(0,
+                             (uint64_t)fat32_read(&fs, &file, 0, output,
+                                                  sizeof(output), &count));
+    TEST_ASSERT_EQUAL_UINT64(sizeof(input), count);
+    TEST_ASSERT_EQUAL_UINT64('n', output[0]);
+    TEST_ASSERT_EQUAL_UINT64('e', output[1]);
+    TEST_ASSERT_EQUAL_UINT64('w', output[2]);
+}
+
+void test_fat32_vfs_open_create_rejects_bad_flags_and_paths(void) {
+    test_fat32_disk_t disk;
+    fat32_fs_t fs;
+
+    test_setup_fat32_disk(&disk);
+    vfs_reset();
+    fat32_vfs_reset();
+
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)fat32_mount(
+                                  &fs, test_disk_read_sector, &disk));
+    fat32_set_write_sector(&fs, test_disk_write_sector);
+
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
+                             (uint64_t)vfs_open_flags("/tmp/new.txt",
+                                                      VFS_O_RDWR |
+                                                          VFS_O_CREAT));
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
+                             (uint64_t)vfs_open_flags("/fat/dir/new.txt",
+                                                      VFS_O_RDWR |
+                                                          VFS_O_CREAT));
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
+                             (uint64_t)vfs_open_flags("/fat/new.txt",
+                                                      VFS_O_ACCMODE));
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)-1,
+                             (uint64_t)vfs_open_flags("/fat/new.txt",
+                                                      VFS_O_RDWR | 0x200U));
+}
+
 /*
  * Common helper that prepares a writable FAT32 image with a small
  * unused cluster range we can allocate into (cluster 5 is free in

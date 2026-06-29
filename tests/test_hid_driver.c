@@ -90,9 +90,29 @@ void test_hid_keyboard_report_emits_release_when_key_dropped(void) {
     hid_boot_keyboard_report_t empty = { 0 };
     input_event_t events[8];
     uint8_t n = usb_hid_keyboard_report(&dev, &empty, events, 8);
+    TEST_ASSERT_EQUAL_UINT64(0, n);
+
+    n = usb_hid_keyboard_report(&dev, &empty, events, 8);
     TEST_ASSERT_EQUAL_UINT64(1, n);
     TEST_ASSERT_EQUAL_UINT64(INPUT_EVENT_KEY_RELEASE, events[0].type);
     TEST_ASSERT_EQUAL_UINT64('a', events[0].data.key.key);
+}
+
+void test_hid_keyboard_report_filters_single_empty_repeat_gap(void) {
+    usb_hid_device_t dev = { 0 };
+    hid_boot_keyboard_report_t a = { 0 };
+    a.keys[0] = 0x04U; /* 'a' */
+    hid_boot_keyboard_report_t empty = { 0 };
+    input_event_t events[8];
+
+    uint8_t n = usb_hid_keyboard_report(&dev, &a, events, 8);
+    TEST_ASSERT_EQUAL_UINT64(1, n);
+
+    n = usb_hid_keyboard_report(&dev, &empty, events, 8);
+    TEST_ASSERT_EQUAL_UINT64(0, n);
+
+    n = usb_hid_keyboard_report(&dev, &a, events, 8);
+    TEST_ASSERT_EQUAL_UINT64(0, n);
 }
 
 void test_hid_keyboard_report_handles_two_key_rollover(void) {

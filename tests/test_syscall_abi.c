@@ -24,6 +24,7 @@
 #include "kernel/syscall_numbers.h"
 #include "kernel/user_exit.h"
 #include "kernel/user_vm.h"
+#include "kernel/vfs.h"
 
 void test_syscall_abi_implemented_numbers_match_dispatch(void) {
     /* Implemented numbers must match the rows in docs/SYSCALLS.md under
@@ -104,6 +105,14 @@ void test_syscall_abi_error_codes_match_documented_constants(void) {
     TEST_ASSERT_TRUE(ERR_BADF != ERR_INVAL);
     TEST_ASSERT_TRUE(ERR_INVAL != ERR_AGAIN);
     TEST_ASSERT_TRUE(ERR_AGAIN != ERR_PERM);
+}
+
+void test_syscall_abi_vfs_open_flags_match_documentation(void) {
+    TEST_ASSERT_EQUAL_UINT64(0ULL, VFS_O_RDONLY);
+    TEST_ASSERT_EQUAL_UINT64(1ULL, VFS_O_WRONLY);
+    TEST_ASSERT_EQUAL_UINT64(2ULL, VFS_O_RDWR);
+    TEST_ASSERT_EQUAL_UINT64(0x40ULL, VFS_O_CREAT);
+    TEST_ASSERT_EQUAL_UINT64(0x43ULL, VFS_O_ALLOWED);
 }
 
 void test_syscall_abi_user_exit_codes_match_documented_constants(void) {

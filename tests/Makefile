@@ -13,6 +13,7 @@ APPS_DIR  := programs/apps
 # test catches the same shape of bug in the BUILD process.
 APP_BLOB_BINS  := $(BUILD_DIR)/$(APPS_DIR)/shell.bin \
                   $(BUILD_DIR)/$(APPS_DIR)/editor.bin \
+                  $(BUILD_DIR)/$(APPS_DIR)/files.bin \
                   $(BUILD_DIR)/$(APPS_DIR)/monitor.bin \
                   $(BUILD_DIR)/$(APPS_DIR)/clock.bin \
                   $(BUILD_DIR)/$(APPS_DIR)/panel.bin

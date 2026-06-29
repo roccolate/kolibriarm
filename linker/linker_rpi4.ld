@@ -27,6 +27,12 @@ SECTIONS {
         __app_editor_end = .;
     } :text
 
+    .app_files : ALIGN(16) {
+        __app_files_start = .;
+        KEEP(*(.app_files_blob*))
+        __app_files_end = .;
+    } :text
+
     .app_monitor : ALIGN(16) {
         __app_monitor_start = .;
         KEEP(*(.app_monitor_blob*))

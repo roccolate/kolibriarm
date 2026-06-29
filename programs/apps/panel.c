@@ -4,7 +4,8 @@
 // button per registered app and a running-apps row underneath.
 //
 // Click handling:
-//   - Launcher button   -> sys_spawn("/armonios/<name>")
+//   - Launcher button   -> focus/restore an existing app window, otherwise
+//                          sys_spawn("/armonios/<name>")
 //   - Running-apps slot -> if the window is minimised, restore it
 //                          through gui_window_restore; otherwise raise
 //                          it through SYS_WINDOW_FOCUS.
@@ -34,24 +35,25 @@
 #define PANEL_Y         (SCREEN_H - PANEL_H)   // 424
 #define BTN_H            24
 #define BTN_Y           (PANEL_Y + 4)         // 428
-// 4 launchers must fit in 640 px with a 4 px left margin:
-//   4 + 4*BTN_W + 3*BTN_GAP == 640 -> BTN_W=156, BTN_GAP=4
-#define BTN_W           156
+// 5 launchers must fit in 640 px with a 4 px left margin:
+//   4 + 5*BTN_W + 4*BTN_GAP == 640 -> BTN_W=124, BTN_GAP=4
+#define BTN_W           124
 #define BTN_GAP           4
-#define BTN_COUNT         4
+#define BTN_COUNT         5
 #define BTN_ROW_W       (BTN_COUNT * BTN_W + (BTN_COUNT - 1) * BTN_GAP)
 #define PANEL_CONTENT_W SCREEN_W
 #define PANEL_CONTENT_H PANEL_H
 
 #define RUN_ROW_Y        32
 #define RUN_ROW_H       (PANEL_H - RUN_ROW_Y)
-#define RUN_SLOT_W      150
+#define RUN_SLOT_W      124
 #define RUN_SLOT_GAP     4
-#define RUN_SLOT_COUNT    4
-#define REFRESH_PERIOD 100
+#define RUN_SLOT_COUNT    5
+#define REFRESH_PERIOD 20
 
 #define EVENT_CAP         8
-#define PROCLIST_MAX      8
+#define PROCLIST_MAX     16
+#define LAUNCH_SETTLE_YIELDS 20
 
 #define COLOR_BG          0xff202428U
 #define COLOR_BORDER      0xff808080U
@@ -104,6 +106,8 @@ typedef struct {
     gui_event_t    events[EVENT_CAP];
 } panel_state_t;
 
+static void refresh_running(panel_state_t *p);
+
 static void copy_label(char *dst, size_t dst_size, const char *src) {
     size_t i = 0;
     while (i + 1 < dst_size && src[i] != '\0') {
@@ -121,6 +125,19 @@ static void clear_running_slots(panel_state_t *p) {
         p->slots[i].minimized = 0;
         p->slots[i].name[0] = '\0';
     }
+}
+
+static int label_equals(const char *left, const char *right) {
+    int i = 0;
+
+    while (i < NAME_CAP && right[i] != '\0') {
+        if (left[i] != right[i]) {
+            return 0;
+        }
+        i++;
+    }
+
+    return i < NAME_CAP && left[i] == '\0';
 }
 
 // Convert absolute framebuffer Y to panel-local Y. Negative results
@@ -229,10 +246,55 @@ static size_t build_path(char *out, size_t out_size, const char *label) {
     return pi;
 }
 
+static long find_launcher_window(panel_state_t *p, int idx,
+                                 uint32_t *out_state) {
+    long existing = -1;
+    uint32_t existing_state = 0;
+    long n = kli_proclist(p->procs, PROCLIST_MAX);
+
+    if (n > 0) {
+        for (long i = 0; i < n; i++) {
+            uint32_t pid = p->procs[i].pid;
+            if (pid == 0 || pid == p->panel_pid ||
+                !label_equals(p->procs[i].name, p->button_labels[idx])) {
+                continue;
+            }
+            existing = gui_window_for_pid((long)pid, 0);
+            if (existing >= 0) {
+                if (gui_window_state(existing, &existing_state) < 0) {
+                    existing_state = 0;
+                }
+                break;
+            }
+        }
+    }
+
+    if (out_state != 0) {
+        *out_state = existing_state;
+    }
+    return existing;
+}
+
 static void launch_button(panel_state_t *p, int idx) {
     if (idx < 0 || idx >= BTN_COUNT) {
         return;
     }
+    uint32_t existing_state = 0;
+    long existing = find_launcher_window(p, idx, &existing_state);
+
+    if (existing >= 0) {
+        kli_write_cstr(1, "panel: raise ");
+        kli_write_cstr(1, p->button_labels[idx]);
+        kli_write_cstr(1, "\n");
+        if ((existing_state & GUI_WINDOW_STATE_MINIMIZED) != 0U) {
+            (void)gui_window_restore(existing);
+        } else {
+            (void)gui_window_focus(existing);
+        }
+        refresh_running(p);
+        return;
+    }
+
     char path[PATH_BUF_CAP];
     size_t len = build_path(path, sizeof(path), p->button_labels[idx]);
     if (len == 0) {
@@ -244,6 +306,21 @@ static void launch_button(panel_state_t *p, int idx) {
     kli_write_cstr(1, "\n");
 
     (void)kli_spawn(path, 0);
+
+    /*
+     * Give the new process several turns to run main() and create its window
+     * before rebuilding the taskbar row. Spawning only proves the process slot
+     * was requested; the taskbar should follow the observable window state.
+     */
+    existing = -1;
+    for (int i = 0; i < LAUNCH_SETTLE_YIELDS; i++) {
+        (void)kli_yield();
+        existing = find_launcher_window(p, idx, &existing_state);
+        if (existing >= 0) {
+            break;
+        }
+    }
+    refresh_running(p);
 }
 
 static void click_running_slot(panel_state_t *p, int idx) {
@@ -366,8 +443,9 @@ static void init_button_labels(panel_state_t *p) {
      * literal in .user.image.rodata. */
     copy_label(p->button_labels[0], LABEL_CAP, "shell");
     copy_label(p->button_labels[1], LABEL_CAP, "editor");
-    copy_label(p->button_labels[2], LABEL_CAP, "monitor");
-    copy_label(p->button_labels[3], LABEL_CAP, "clock");
+    copy_label(p->button_labels[2], LABEL_CAP, "files");
+    copy_label(p->button_labels[3], LABEL_CAP, "monitor");
+    copy_label(p->button_labels[4], LABEL_CAP, "clock");
 }
 
 int main(int argc, char **argv) {
@@ -437,10 +515,10 @@ int main(int argc, char **argv) {
 
 #ifdef PANEL_AUTO_TEST
     /*
-     * Smoke test: launch every non-panel button once at boot so the
-     * UART log shows whether each app survives main(), creates its
-     * window, and stays alive. Disabled by default; enable by
-     * passing -DPANEL_AUTO_TEST to the compiler.
+     * Smoke test: launch every button once at boot so the UART log shows
+     * whether each app survives main(), creates its window, and stays alive.
+     * Disabled by default; enable by passing -DPANEL_AUTO_TEST to the
+     * compiler.
      */
     kli_write_cstr(1, "panel: auto-test launch every button\n");
     for (int idx = 0; idx < BTN_COUNT; idx++) {

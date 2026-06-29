@@ -387,6 +387,7 @@ void test_user_image_runtime_entry_offset_matches_image_base_plus_offset(void) {
 
 DECLARE_APP_BLOB(shell)
 DECLARE_APP_BLOB(editor)
+DECLARE_APP_BLOB(files)
 DECLARE_APP_BLOB(monitor)
 DECLARE_APP_BLOB(clock)
 DECLARE_APP_BLOB(panel)
@@ -394,11 +395,12 @@ DECLARE_APP_BLOB(panel)
 /* Expected image_size per app (image_end - image_header). Bumped
  * when the corresponding .c file adds code or rodata; reduced
  * when image_end lands in the wrong section (the bug shape). */
-#define EXPECTED_SHELL_IMAGE_SIZE   3535ULL
-#define EXPECTED_EDITOR_IMAGE_SIZE  2442ULL
+#define EXPECTED_SHELL_IMAGE_SIZE   5859ULL
+#define EXPECTED_EDITOR_IMAGE_SIZE  2684ULL
+#define EXPECTED_FILES_IMAGE_SIZE   3416ULL
 #define EXPECTED_MONITOR_IMAGE_SIZE 1480ULL
-#define EXPECTED_CLOCK_IMAGE_SIZE   972ULL
-#define EXPECTED_PANEL_IMAGE_SIZE   2505ULL
+#define EXPECTED_CLOCK_IMAGE_SIZE   1082ULL
+#define EXPECTED_PANEL_IMAGE_SIZE   2969ULL
 
 static void assert_app_image_size(const char *app_name,
                                   const char *start,
@@ -442,6 +444,12 @@ void test_user_image_runtime_shipping_editor_image_size(void) {
     assert_app_image_size("editor",
         _binary____build_programs_apps_editor_bin_start,
         EXPECTED_EDITOR_IMAGE_SIZE);
+}
+
+void test_user_image_runtime_shipping_files_image_size(void) {
+    assert_app_image_size("files",
+        _binary____build_programs_apps_files_bin_start,
+        EXPECTED_FILES_IMAGE_SIZE);
 }
 
 void test_user_image_runtime_shipping_monitor_image_size(void) {

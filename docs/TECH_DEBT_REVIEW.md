@@ -28,8 +28,8 @@ timeout 25s make qemu-fb
 timeout 25s make qemu-usb
 ```
 
-Latest verified size after the first v1.0 networking follow-up:
-`kernel.bin: 85840 bytes (limit: 100000)`.
+The current verified kernel size is tracked in `docs/CURRENT_STATE.md`; this
+closed review keeps only the baseline commands and closure history.
 
 ## Closed Items
 
@@ -72,11 +72,10 @@ Latest verified size after the first v1.0 networking follow-up:
 
 ## Current Follow-Up Pointer
 
-Do not reopen this closed backlog for new optimization work. The v1.0/v1.1
-follow-up coordination now lives in `docs/ROADMAP.md` and
-`docs/CURRENT_STATE.md`. The first userland stack pass moved large app state
-to anonymous user mappings and currently leaves `make stack-check` at a
-368-byte maximum.
+Do not reopen this closed backlog for new optimization work. Follow-up
+coordination now lives in `docs/ROADMAP.md` and `docs/CURRENT_STATE.md`. The
+userland stack pass moved large app state to anonymous user mappings and
+currently leaves `make stack-check` at a 368-byte maximum.
 
 ## Follow-Up Policy
 

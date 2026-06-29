@@ -8,7 +8,8 @@
 //   [history ..          ]
 //   [.. scrolled view .. ]  <-- DISPLAY_LINES rows pulled from log[]
 //   [.. top of log      ]
-//   U <line>            <-- prompt row, always at the bottom
+//   <cwd>               <-- current working directory
+//   > <line>            <-- prompt row, always near the bottom
 //   ENTER RUNS COMMAND  <-- footer
 //
 // PgUp / PgDn scroll the log view; scroll_offset resets to 0 when
@@ -17,8 +18,8 @@
 // the log scroll position.
 //
 // Non-window syscalls (spawn, spawn_argv, kill, readdir, timeinfo,
-// meminfo, proclist, write, yield, exit) go through libkarm's typed
-// wrappers. Number formatting and string compare go through
+// meminfo, proclist, open/read/close, write, yield, exit) go through
+// libkarm's typed wrappers. Number formatting and string compare go through
 // <libkarm/string.h>. Window syscalls go through libkarmdesk's
 // typed gui_* wrappers.
 
@@ -35,12 +36,14 @@
 #define WIN_H          280
 #define TITLE_BAR_H     16
 #define LINE_CAP        64
-#define DISPLAY_LINES    7
+#define DISPLAY_LINES   10
 #define DISPLAY_COLS    48
+#define IO_BUF_CAP     128
 #define EVENT_CAP        8
 #define PROC_CAP         4
 #define ARGV_MAX         8
 #define HISTORY_DEPTH    4
+#define CAT_MAX_CHUNKS   8
 /* Circular log buffer depth. Each entry is a fixed LINE_CAP-byte
  * cstring. LOG_DEPTH controls how far the user can scroll back from
  * the latest output via Page Up. The shell's persistent state is
@@ -52,6 +55,8 @@
 #define COLOR_BG         0xff141820U
 #define COLOR_BORDER     0xff708870U
 #define COLOR_TEXT       0xffd8e8d8U
+
+#define O_RDONLY         0
 
 // Arrow keys come in as synthetic codes from drivers/input/input.c.
 #define INPUT_KEY_UP    0x101U
@@ -70,7 +75,7 @@ typedef struct {
     /* Current input line being edited. */
     char   line[LINE_CAP];
     size_t line_len;
-    /* Command history: depth-8 ring of past input lines. */
+    /* Command history: fixed-depth ring of past input lines. */
     char   history[HISTORY_DEPTH][LINE_CAP];
     int    history_count;
     int    history_cursor;   // == history_count means "live"
@@ -86,6 +91,11 @@ typedef struct {
      * to the bottom. >0 freezes the view on older entries. */
     int    scroll_offset;
     long   wid;
+    char   cwd[LINE_CAP];
+    char   arg_buf[LINE_CAP];
+    char   path_buf[LINE_CAP];
+    char   io_buf[IO_BUF_CAP];
+    char   emit_buf[DISPLAY_COLS];
     /* Syscall scratch buffers. */
     uint64_t   info[3];
     char       numbuf[24];
@@ -93,7 +103,15 @@ typedef struct {
     proc_entry_t procs[PROC_CAP];
     char       argv_strs[ARGV_MAX][LINE_CAP];
     uint64_t   argv_ptrs[ARGV_MAX];
+    gui_event_t events[EVENT_CAP];
 } shell_state_t;
+
+typedef enum {
+    SHELL_ARG_MISSING = 0,
+    SHELL_ARG_OK = 1,
+    SHELL_ARG_TOO_MANY = -1,
+    SHELL_ARG_TOO_LONG = -2,
+} shell_arg_result_t;
 
 static void log_push(shell_state_t *s, const char *line) {
     (void)strlcpy(s->log[s->log_head], line, LINE_CAP);
@@ -173,12 +191,13 @@ static void redraw(shell_state_t *s) {
     for (int i = 0; i < DISPLAY_LINES; i++) {
         draw_text(s->wid, 12, 28 + i * 16, s->display_lines[i]);
     }
-    /* Prompt row sits just below the log view, anchored to the
+    /* Prompt rows sit just below the log view, anchored to the
      * bottom of the visible area regardless of scroll_offset. */
     long prompt_y = 28 + DISPLAY_LINES * 16;
-    draw_text(s->wid, 12, prompt_y, "U");
-    draw_text(s->wid, 32, prompt_y, s->line);
-    draw_text(s->wid, 12, prompt_y + 28, "ENTER RUNS COMMAND");
+    draw_text(s->wid, 12, prompt_y, s->cwd);
+    draw_text(s->wid, 12, prompt_y + 16, ">");
+    draw_text(s->wid, 32, prompt_y + 16, s->line);
+    draw_text(s->wid, 12, prompt_y + 36, "ENTER RUNS COMMAND");
     (void)gui_window_flush(s->wid, 0, 0, WIN_W, WIN_H - TITLE_BAR_H);
 }
 
@@ -188,6 +207,14 @@ static void shell_emit(shell_state_t *s, const char *text) {
     // Auto-follow: if the user is at the bottom, snap the view.
     if (s->scroll_offset > 0) {
         s->scroll_offset = 0;
+    }
+}
+
+static void shell_exit(shell_state_t *s) {
+    (void)gui_window_destroy(s->wid);
+    kli_exit(0);
+    for (;;) {
+        (void)kli_yield();
     }
 }
 
@@ -202,22 +229,181 @@ static int starts_with(const char *s, const char *prefix) {
     return 1;
 }
 
+static shell_arg_result_t parse_one_arg(const char *input, char *out,
+                                        size_t out_size) {
+    while (*input == ' ') {
+        input++;
+    }
+    if (*input == '\0') {
+        out[0] = '\0';
+        return SHELL_ARG_MISSING;
+    }
+
+    size_t len = 0;
+    while (input[len] != '\0' && input[len] != ' ') {
+        if (len + 1 >= out_size) {
+            out[0] = '\0';
+            return SHELL_ARG_TOO_LONG;
+        }
+        out[len] = input[len];
+        len++;
+    }
+    out[len] = '\0';
+
+    input += len;
+    while (*input == ' ') {
+        input++;
+    }
+    if (*input != '\0') {
+        out[0] = '\0';
+        return SHELL_ARG_TOO_MANY;
+    }
+    return SHELL_ARG_OK;
+}
+
+static int path_copy(char *out, size_t out_size, const char *src) {
+    return strlcpy(out, src, out_size) < out_size ? 0 : -1;
+}
+
+static int path_is_root(const char *path) {
+    return path[0] == '/' && path[1] == '\0';
+}
+
+static void path_trim_trailing_slashes(char *path) {
+    size_t len = 0;
+    while (path[len] != '\0') {
+        len++;
+    }
+    while (len > 1 && path[len - 1] == '/') {
+        path[len - 1] = '\0';
+        len--;
+    }
+}
+
+static void path_parent(char *path) {
+    if (path_is_root(path)) {
+        return;
+    }
+    size_t len = 0;
+    while (path[len] != '\0') {
+        len++;
+    }
+    while (len > 1 && path[len - 1] == '/') {
+        path[len - 1] = '\0';
+        len--;
+    }
+    while (len > 1 && path[len - 1] != '/') {
+        len--;
+    }
+    if (len <= 1) {
+        path[0] = '/';
+        path[1] = '\0';
+    } else {
+        path[len - 1] = '\0';
+    }
+}
+
+static int resolve_path(const shell_state_t *s, const char *arg,
+                        char *out, size_t out_size) {
+    if (arg[0] == '\0' || strcmp(arg, ".") == 0) {
+        return path_copy(out, out_size, s->cwd);
+    }
+    if (strcmp(arg, "..") == 0) {
+        if (path_copy(out, out_size, s->cwd) != 0) {
+            return -1;
+        }
+        path_parent(out);
+        return 0;
+    }
+    if (arg[0] == '/') {
+        if (path_copy(out, out_size, arg) != 0) {
+            return -1;
+        }
+        path_trim_trailing_slashes(out);
+        return 0;
+    }
+
+    size_t pos = 0;
+    if (path_is_root(s->cwd)) {
+        if (out_size < 2) {
+            return -1;
+        }
+        out[pos++] = '/';
+    } else {
+        size_t n = strlcpy(out, s->cwd, out_size);
+        if (n >= out_size || n + 1 >= out_size) {
+            return -1;
+        }
+        pos = n;
+        out[pos++] = '/';
+    }
+
+    size_t i = 0;
+    while (arg[i] != '\0') {
+        if (pos + 1 >= out_size) {
+            out[0] = '\0';
+            return -1;
+        }
+        out[pos++] = arg[i++];
+    }
+    out[pos] = '\0';
+    path_trim_trailing_slashes(out);
+    return 0;
+}
+
+static void shell_emit_buffer(shell_state_t *s, const char *buf, long len) {
+    size_t col = 0;
+
+    for (long i = 0; i < len; i++) {
+        char c = buf[i];
+        if (c == '\r') {
+            continue;
+        }
+        if (c == '\n') {
+            if (col > 0) {
+                s->emit_buf[col] = '\0';
+                shell_emit(s, s->emit_buf);
+                col = 0;
+            }
+            continue;
+        }
+        if (c < 32 || c > 126) {
+            c = ' ';
+        }
+        if (col + 1 >= DISPLAY_COLS) {
+            s->emit_buf[col] = '\0';
+            shell_emit(s, s->emit_buf);
+            col = 0;
+        }
+        s->emit_buf[col++] = c;
+    }
+
+    if (col > 0) {
+        s->emit_buf[col] = '\0';
+        shell_emit(s, s->emit_buf);
+    }
+}
+
 static void cmd_run(shell_state_t *s, const char *input) {
     while (*input == ' ') {
         input++;
     }
     if (*input == '\0') {
-        shell_emit(s, "RUN FAILED");
+        shell_emit(s, "RUN: MISSING APP");
         return;
     }
     int argc = 0;
     const char *p = input;
-    while (*p != '\0' && argc < ARGV_MAX) {
+    while (*p != '\0') {
         while (*p == ' ') {
             p++;
         }
         if (*p == '\0' || *p == ' ') {
             break;
+        }
+        if (argc >= ARGV_MAX) {
+            shell_emit(s, "RUN: TOO MANY ARGS");
+            return;
         }
         const char *start = p;
         while (*p != '\0' && *p != ' ') {
@@ -225,7 +411,8 @@ static void cmd_run(shell_state_t *s, const char *input) {
         }
         size_t len = (size_t)(p - start);
         if (len >= LINE_CAP) {
-            len = LINE_CAP - 1;
+            shell_emit(s, "RUN: ARG TOO LONG");
+            return;
         }
         for (size_t i = 0; i < len; i++) {
             s->argv_strs[argc][i] = start[i];
@@ -235,66 +422,188 @@ static void cmd_run(shell_state_t *s, const char *input) {
         argc++;
     }
     if (argc == 0) {
-        shell_emit(s, "RUN FAILED");
+        shell_emit(s, "RUN: MISSING APP");
         return;
     }
-    char path[32];
     const char *prefix = "/armonios/";
-    size_t pi = 0;
-    while (prefix[pi] != '\0') {
-        path[pi] = prefix[pi];
-        pi++;
+    size_t pi = strlcpy(s->path_buf, prefix, sizeof(s->path_buf));
+    if (pi >= sizeof(s->path_buf)) {
+        shell_emit(s, "RUN: PATH TOO LONG");
+        return;
     }
-    for (size_t i = 0; s->argv_strs[0][i] != '\0' && pi + 1 < sizeof(path); i++) {
-        path[pi++] = s->argv_strs[0][i];
+    for (size_t i = 0; s->argv_strs[0][i] != '\0'; i++) {
+        if (pi + 1 >= sizeof(s->path_buf)) {
+            shell_emit(s, "RUN: APP NAME TOO LONG");
+            return;
+        }
+        s->path_buf[pi++] = s->argv_strs[0][i];
     }
-    path[pi] = '\0';
+    s->path_buf[pi] = '\0';
 
-    long pid = kli_spawn_argv(path, 0, (const long *)s->argv_ptrs, (long)argc);
+    long pid = kli_spawn_argv(s->path_buf, 0,
+                              (const long *)s->argv_ptrs, (long)argc);
     if (pid < 0) {
-        shell_emit(s, "RUN FAILED");
+        shell_emit(s, "RUN: NOT FOUND");
         return;
     }
     s->last_spawned_pid = (int)pid;
-    shell_emit(s, "SPAWNED");
+    shell_emit(s, "RUN: SPAWNED PID");
+    kli_utoa((uint64_t)pid, s->numbuf, sizeof(s->numbuf));
+    shell_emit(s, s->numbuf);
+}
+
+static void cmd_pwd(shell_state_t *s) {
+    shell_emit(s, s->cwd);
+}
+
+static void cmd_cd(shell_state_t *s, const char *input) {
+    shell_arg_result_t arg = parse_one_arg(input, s->arg_buf,
+                                           sizeof(s->arg_buf));
+    if (arg == SHELL_ARG_TOO_MANY) {
+        shell_emit(s, "CD: TOO MANY ARGS");
+        return;
+    }
+    if (arg == SHELL_ARG_TOO_LONG) {
+        shell_emit(s, "CD: PATH TOO LONG");
+        return;
+    }
+
+    if (arg == SHELL_ARG_MISSING) {
+        (void)path_copy(s->cwd, sizeof(s->cwd), "/");
+        shell_emit(s, "CD: /");
+        return;
+    }
+    if (resolve_path(s, s->arg_buf, s->path_buf, sizeof(s->path_buf)) != 0) {
+        shell_emit(s, "CD: PATH TOO LONG");
+        return;
+    }
+    if (kli_readdir(s->path_buf, s->io_buf, sizeof(s->io_buf)) < 0) {
+        shell_emit(s, "CD: NOT A DIR");
+        return;
+    }
+
+    (void)path_copy(s->cwd, sizeof(s->cwd), s->path_buf);
+    shell_emit(s, "CD:");
+    shell_emit(s, s->cwd);
+}
+
+static void cmd_ls(shell_state_t *s, const char *input) {
+    shell_arg_result_t arg = parse_one_arg(input, s->arg_buf,
+                                           sizeof(s->arg_buf));
+
+    if (arg == SHELL_ARG_TOO_MANY) {
+        shell_emit(s, "LS: TOO MANY ARGS");
+        return;
+    }
+    if (arg == SHELL_ARG_TOO_LONG) {
+        shell_emit(s, "LS: PATH TOO LONG");
+        return;
+    }
+    if (arg == SHELL_ARG_MISSING) {
+        s->arg_buf[0] = '\0';
+    }
+    if (resolve_path(s, s->arg_buf, s->path_buf, sizeof(s->path_buf)) != 0) {
+        shell_emit(s, "LS: PATH TOO LONG");
+        return;
+    }
+
+    long n = kli_readdir(s->path_buf, s->io_buf, sizeof(s->io_buf));
+    if (n < 0) {
+        shell_emit(s, "LS: FAILED");
+    } else if (n == 0) {
+        shell_emit(s, "LS: EMPTY");
+    } else {
+        shell_emit_buffer(s, s->io_buf, n);
+    }
+}
+
+static void cmd_cat(shell_state_t *s, const char *input) {
+    shell_arg_result_t arg = parse_one_arg(input, s->arg_buf,
+                                           sizeof(s->arg_buf));
+    if (arg == SHELL_ARG_MISSING) {
+        shell_emit(s, "CAT: MISSING PATH");
+        return;
+    }
+    if (arg == SHELL_ARG_TOO_MANY) {
+        shell_emit(s, "CAT: TOO MANY ARGS");
+        return;
+    }
+    if (arg == SHELL_ARG_TOO_LONG ||
+        resolve_path(s, s->arg_buf, s->path_buf, sizeof(s->path_buf)) != 0) {
+        shell_emit(s, "CAT: PATH TOO LONG");
+        return;
+    }
+
+    long fd = kli_open(s->path_buf, O_RDONLY);
+    if (fd < 0) {
+        shell_emit(s, "CAT: OPEN FAILED");
+        return;
+    }
+
+    int chunks = 0;
+    for (;;) {
+        long n = kli_read((int)fd, s->io_buf, sizeof(s->io_buf));
+        if (n < 0) {
+            shell_emit(s, "CAT: READ FAILED");
+            break;
+        }
+        if (n == 0) {
+            if (chunks == 0) {
+                shell_emit(s, "CAT: EMPTY");
+            }
+            break;
+        }
+        shell_emit_buffer(s, s->io_buf, n);
+        chunks++;
+        if (chunks >= CAT_MAX_CHUNKS) {
+            shell_emit(s, "CAT: TRUNCATED");
+            break;
+        }
+    }
+    (void)kli_close((int)fd);
 }
 
 static void dispatch(shell_state_t *s, const char *line) {
     if (strcmp(line, "help") == 0) {
-        shell_emit(s, "HELP LS MEM PS TICKS RUN NAME KILL LAST EXIT");
+        shell_emit(s, "HELP PWD CD LS CAT RUN KILL EXIT");
+        shell_emit(s, "HELP MEM PS TICKS");
+    } else if (strcmp(line, "pwd") == 0) {
+        cmd_pwd(s);
+    } else if (strcmp(line, "cd") == 0) {
+        cmd_cd(s, "");
+    } else if (starts_with(line, "cd ")) {
+        cmd_cd(s, line + 3);
     } else if (strcmp(line, "ls") == 0) {
-        char buf[DISPLAY_COLS];
-        long n = kli_readdir("/", buf, (long)sizeof(buf));
-        if (n < 0) {
-            shell_emit(s, "LS FAILED");
-        } else {
-            if (n >= DISPLAY_COLS) n = DISPLAY_COLS - 1;
-            buf[n] = '\0';
-            shell_emit(s, buf);
-        }
+        cmd_ls(s, "");
+    } else if (starts_with(line, "ls ")) {
+        cmd_ls(s, line + 3);
+    } else if (starts_with(line, "cat ")) {
+        cmd_cat(s, line + 4);
+    } else if (strcmp(line, "cat") == 0) {
+        cmd_cat(s, "");
     } else if (strcmp(line, "mem") == 0) {
         if (kli_meminfo(s->info) < 0) {
-            shell_emit(s, "MEM FAILED");
+            shell_emit(s, "MEM: FAILED");
         } else {
-            shell_emit(s, "FREE PAGES");
+            shell_emit(s, "MEM: FREE PAGES");
             kli_utoa(s->info[1], s->numbuf, sizeof(s->numbuf));
             shell_emit(s, s->numbuf);
         }
     } else if (strcmp(line, "ps") == 0) {
         long n = kli_proclist(s->procs, PROC_CAP);
         if (n < 0) {
-            shell_emit(s, "PS FAILED");
+            shell_emit(s, "PS: FAILED");
             return;
         }
-        shell_emit(s, "PROCESSES");
+        shell_emit(s, "PS: PROCESS NAMES");
         for (long i = 0; i < n && i < PROC_CAP; i++) {
             shell_emit(s, s->procs[i].name);
         }
     } else if (strcmp(line, "ticks") == 0) {
         if (kli_timeinfo(s->info) < 0) {
-            shell_emit(s, "TICKS FAILED");
+            shell_emit(s, "TICKS: FAILED");
         } else {
-            shell_emit(s, "TIMER TICKS");
+            shell_emit(s, "TICKS: TIMER");
             kli_utoa(s->info[0], s->numbuf, sizeof(s->numbuf));
             shell_emit(s, s->numbuf);
         }
@@ -302,20 +611,16 @@ static void dispatch(shell_state_t *s, const char *line) {
         cmd_run(s, line + 4);
     } else if (strcmp(line, "kill last") == 0) {
         if (s->last_spawned_pid == 0) {
-            shell_emit(s, "KILL FAILED");
-        } else {
-            (void)kli_kill((long)s->last_spawned_pid);
+            shell_emit(s, "KILL: NO LAST PID");
+        } else if (kli_kill((long)s->last_spawned_pid) < 0) {
             s->last_spawned_pid = 0;
-            shell_emit(s, "KILLED");
+            shell_emit(s, "KILL: FAILED");
+        } else {
+            s->last_spawned_pid = 0;
+            shell_emit(s, "KILL: SENT");
         }
-    } else if (strcmp(line, "pwd") == 0) {
-        shell_emit(s, "ROOT");
     } else if (strcmp(line, "exit") == 0) {
-        (void)gui_window_destroy(s->wid);
-        kli_exit(0);
-        for (;;) {
-            (void)kli_yield();
-        }
+        shell_exit(s);
     } else {
         shell_emit(s, "UNKNOWN COMMAND");
     }
@@ -323,11 +628,7 @@ static void dispatch(shell_state_t *s, const char *line) {
 
 static void handle_key(shell_state_t *s, int key) {
     if (key == 17) {
-        (void)gui_window_destroy(s->wid);
-        kli_exit(0);
-        for (;;) {
-            (void)kli_yield();
-        }
+        shell_exit(s);
     }
     if (key == INPUT_KEY_UP) {
         if (s->history_cursor > 0) {
@@ -413,6 +714,7 @@ int main(int argc, char **argv) {
     }
     shell_state_t *s = (shell_state_t *)(uintptr_t)state_addr;
     memset(s, 0, sizeof(*s));
+    (void)path_copy(s->cwd, sizeof(s->cwd), "/");
 
     kli_write_cstr(1, "shell: starting\n");
 
@@ -427,18 +729,17 @@ int main(int argc, char **argv) {
     shell_emit(s, "SHELL READY");
     redraw(s);
 
-    gui_event_t events[EVENT_CAP];
     for (;;) {
-        long n = gui_window_event(s->wid, events, EVENT_CAP);
+        long n = gui_window_event(s->wid, s->events, EVENT_CAP);
         if (n > 0) {
             int dirty = 0;
             for (long i = 0; i < n; i++) {
-                if (events[i].type == GUI_EVENT_CLOSE) {
+                if (s->events[i].type == GUI_EVENT_CLOSE) {
                     (void)gui_window_destroy(s->wid);
                     return 0;
                 }
-                if (events[i].type == GUI_EVENT_KEY_PRESS) {
-                    handle_key(s, events[i].data1);
+                if (s->events[i].type == GUI_EVENT_KEY_PRESS) {
+                    handle_key(s, s->events[i].data1);
                     dirty = 1;
                 }
             }

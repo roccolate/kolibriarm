@@ -283,6 +283,13 @@ int app_spawn_vfs(const char *path, uint32_t entry_index,
     if (process == 0) {
         return -1;
     }
+    /*
+     * process_alloc initializes slots as READY for normal direct unit-test
+     * setup, but a spawned EL0 app is not runnable until its image, stack,
+     * page table, and optional argv are fully installed. Keep it off the
+     * scheduler's ready list until the end of this function.
+     */
+    process->state = PROCESS_BLOCKED;
 
     if (process_index(process, &slot) != 0 || slot >= PROCESS_MAX_PROCESSES) {
         process_release(process);
