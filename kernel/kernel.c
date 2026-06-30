@@ -74,7 +74,9 @@ static void console_input_thread(void *arg) {
                 char c = (char)event.data.key.key;
                 console_poll_char(c);
             } else {
-                break;
+                /* Consume and discard non-key events so they don't
+                 * starve KEY_PRESS events queued behind them. */
+                (void)input_queue_poll(&event);
             }
         }
 
