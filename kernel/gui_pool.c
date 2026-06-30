@@ -89,7 +89,7 @@ int gui_create_window_for_pid(gui_desktop_t *desktop, uint32_t owner_pid,
                               uint32_t bg_color, uint32_t border_color,
                               const char *title, uint32_t *window_id) {
     if (desktop == 0 || desktop->fb == 0 || w < 2U || h < 2U ||
-        x >= desktop->fb->width || y >= desktop->fb->height) {
+        gui_rect_fits_framebuffer(desktop->fb, x, y, w, h) == 0) {
         return -1;
     }
 
