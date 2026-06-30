@@ -186,9 +186,9 @@ static void run_ps(void) {
     if (desktop != 0) {
         gui_get_cursor(desktop, &cx, &cy);
         uart_puts(" cursor=");
-        print_dec64((uint64_t)cx);
+        print_signed32(cx);
         uart_puts(",");
-        print_dec64((uint64_t)cy);
+        print_signed32(cy);
     }
     uart_puts("\n");
 }
@@ -298,9 +298,9 @@ static int parse_signed(const char **cursor, int32_t *out) {
 static void run_mouse(int32_t x, int32_t y) {
     queue_mouse_move(x, y);
     uart_puts("mouse ");
-    print_dec64((uint64_t)x);
+    print_signed32(x);
     uart_puts(" ");
-    print_dec64((uint64_t)y);
+    print_signed32(y);
     uart_puts("\n");
 }
 
@@ -309,9 +309,9 @@ static void run_click(int32_t x, int32_t y) {
     queue_mouse_button(0, 1);
     queue_mouse_button(0, 0);
     uart_puts("click ");
-    print_dec64((uint64_t)x);
+    print_signed32(x);
     uart_puts(" ");
-    print_dec64((uint64_t)y);
+    print_signed32(y);
     uart_puts("\n");
 }
 

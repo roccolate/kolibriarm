@@ -43,3 +43,13 @@ void print_dec64(uint64_t value) {
         uart_putc(buf[--i]);
     }
 }
+
+void print_signed32(int32_t value) {
+    if (value < 0) {
+        uart_putc('-');
+        /* Use uint32_t to handle INT32_MIN without overflow. */
+        print_dec64((uint64_t)(uint32_t)(-(int64_t)value));
+    } else {
+        print_dec64((uint64_t)(uint32_t)value);
+    }
+}
