@@ -59,8 +59,11 @@ int dtb_get_framebuffer(uint64_t dtb_addr, dtb_framebuffer_t *framebuffer) {
                 have_stride = 0;
             }
 
-            while (*(const char *)cursor != '\0') {
+            while (cursor < struct_end && *(const char *)cursor != '\0') {
                 cursor++;
+            }
+            if (cursor >= struct_end) {
+                return -1;
             }
             cursor = fdt_align4(cursor + 1U);
         } else if (token == FDT_END_NODE) {
@@ -75,12 +78,19 @@ int dtb_get_framebuffer(uint64_t dtb_addr, dtb_framebuffer_t *framebuffer) {
 
             depth--;
         } else if (token == FDT_PROP) {
+            if (cursor + sizeof(uint32_t) * 2U > struct_end) {
+                return -1;
+            }
             uint32_t len = fdt_be32((const void *)cursor);
             uint32_t nameoff = fdt_be32((const void *)(cursor + sizeof(uint32_t)));
             const char *name = strings + nameoff;
             const uint32_t *value = (const uint32_t *)(cursor + sizeof(uint32_t) * 2U);
 
             cursor += sizeof(uint32_t) * 2U;
+
+            if (cursor + len > struct_end) {
+                return -1;
+            }
 
             if (depth == 0 && fdt_streq(name, "#address-cells") &&
                 len >= sizeof(uint32_t)) {
