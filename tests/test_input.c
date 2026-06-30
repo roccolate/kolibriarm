@@ -3,12 +3,6 @@
 #include "unity/unity.h"
 #include "../drivers/input/input.h"
 
-/*
- * Stub UART that never has a byte ready. Lets us test
- * input_inject_byte directly without going through MMIO.
- */
-int uart_getc_nonblock(void) { return -1; }
-
 static uint32_t pop_key(void) {
     input_event_t event;
     TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)input_queue_poll(&event));

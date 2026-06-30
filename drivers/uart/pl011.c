@@ -16,11 +16,6 @@
 #define UART_INT_RX    (1U << 4)
 #define UART_INT_RT    (1U << 6)
 #define UART_LCRH_FEN  (1U << 4)
-#define UART_RX_BUFFER_SIZE 128U
-
-static char g_rx_buffer[UART_RX_BUFFER_SIZE];
-static uint32_t g_rx_head;
-static uint32_t g_rx_tail;
 static uint64_t g_uart_base;
 
 static volatile uint32_t *uart_reg(uint32_t offset) {
@@ -30,8 +25,6 @@ static volatile uint32_t *uart_reg(uint32_t offset) {
 void uart_init(uint64_t base) {
     /* QEMU virt firmware leaves PL011 usable for polling output. */
     g_uart_base = base;
-    g_rx_head = 0;
-    g_rx_tail = 0;
     *uart_reg(UART_ICR) = UART_INT_RX | UART_INT_RT;
 }
 
@@ -51,10 +44,6 @@ void uart_puts(const char *s) {
     while (*s != '\0') {
         uart_putc(*s++);
     }
-}
-
-static uint32_t rx_next(uint32_t index) {
-    return (index + 1U) % UART_RX_BUFFER_SIZE;
 }
 
 void uart_enable_rx_irq(void) {
@@ -98,23 +87,4 @@ void uart_pump_input(void) {
     }
 }
 
-int uart_getc_nonblock(void) {
-    char c;
 
-    if (g_rx_head == g_rx_tail) {
-        return -1;
-    }
-
-    c = g_rx_buffer[g_rx_tail];
-    g_rx_tail = rx_next(g_rx_tail);
-
-    return (int)(uint8_t)c;
-}
-
-uint32_t uart_rx_available(void) {
-    if (g_rx_head >= g_rx_tail) {
-        return g_rx_head - g_rx_tail;
-    }
-
-    return UART_RX_BUFFER_SIZE - g_rx_tail + g_rx_head;
-}
