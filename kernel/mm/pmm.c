@@ -85,6 +85,12 @@ void pmm_init(uint64_t mem_base, uint64_t mem_size) {
     for (uint64_t i = 0; i < g_total_pages; i++) {
         set_free(i);
     }
+
+    /* Reserve page 0 so that pmm_alloc_page can use 0 as an error
+     * sentinel without accidentally handing out a valid page. */
+    if (g_mem_base == 0 && g_total_pages > 0) {
+        set_used(0);
+    }
 }
 
 void pmm_reserve_range(uint64_t start, uint64_t size) {

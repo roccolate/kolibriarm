@@ -16,8 +16,10 @@
 
 #define KHEAP_ALIGN       16ULL
 #define KHEAP_MIN_SPLIT   32ULL
+#define KHEAP_MAGIC       0x4B484541504F4B21ULL  /* "KHEAPOK!" */
 
 typedef struct heap_block {
+    uint64_t magic;
     uint64_t size;
     uint64_t free;
     struct heap_block *next;
@@ -98,6 +100,7 @@ static heap_block_t *extend_heap(uint64_t min_payload_size) {
     }
 
     block = (heap_block_t *)(uintptr_t)addr;
+    block->magic = KHEAP_MAGIC;
     block->size = block_payload_capacity(pages);
     block->free = 1;
     block->arena_id = g_next_arena_id++;
@@ -116,6 +119,7 @@ static void split_block(heap_block_t *block, uint64_t size) {
     }
 
     next = (heap_block_t *)((uintptr_t)block + hdr + size);
+    next->magic = KHEAP_MAGIC;
     next->size = block->size - size - hdr;
     next->free = 1;
     next->arena_id = block->arena_id;
@@ -201,6 +205,9 @@ void kfree(void *ptr) {
     }
 
     block = (heap_block_t *)((uintptr_t)ptr - header_size());
+    if (block->magic != KHEAP_MAGIC) {
+        return;
+    }
     if (block->free != 0) {
         return;
     }

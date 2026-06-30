@@ -84,6 +84,14 @@ int64_t user_vm_map_anonymous(process_t *process, uint64_t hint,
         return USER_VM_ERR_NOMEM;
     }
 
+    /* Zero the pages to prevent information leaks between processes. */
+    {
+        uint8_t *p = (uint8_t *)(uintptr_t)paddr;
+        for (uint64_t i = 0; i < aligned_size; i++) {
+            p[i] = 0;
+        }
+    }
+
     if (vmm_map_range(process->page_table, addr, paddr, aligned_size,
                       vmm_flags) != 0) {
         (void)vmm_unmap_range(process->page_table, addr, aligned_size);

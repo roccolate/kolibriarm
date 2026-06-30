@@ -56,18 +56,20 @@
 
 #define EMMC_R1_ERRORS          0x017A0000U
 
+#define EMMC_BLOCK_SIZE         512U
+
 #define EMMC_VOLTAGE_SUPPLY     0x00CF0000U
-#define EMMC_CMD_GO_IDLE        0x00000000U
-#define EMMC_CMD_MMC_SEND_OP    0x01020000U
-#define EMMC_CMD_ALL_SEND_CID   0x02030000U
-#define EMMC_CMD_SEND_REL_ADDR  0x03030000U
-#define EMMC_CMD_CARD_SELECT    0x07030000U
-#define EMMC_CMD_SEND_CSD       0x09020000U
-#define EMMC_CMD_READ_SINGLE    0x112200a0U
-#define EMMC_CMD_READ_MULTI     0x122200a0U
-#define EMMC_CMD_WRITE_SINGLE   0x18220000U
-#define EMMC_CMD_WRITE_MULTI    0x19220000U
-#define EMMC_CMD_APP_CMD        0x37000000U
+#define EMMC_CMD_GO_IDLE        ((0U << EMMC_CMD_INDEX_SHIFT) | EMMC_CMD_RESP_NONE)
+#define EMMC_CMD_MMC_SEND_OP    ((1U << EMMC_CMD_INDEX_SHIFT) | EMMC_CMD_RESP_R2)
+#define EMMC_CMD_ALL_SEND_CID   ((2U << EMMC_CMD_INDEX_SHIFT) | EMMC_CMD_RESP_R2 | 0x00010000U)
+#define EMMC_CMD_SEND_REL_ADDR  ((3U << EMMC_CMD_INDEX_SHIFT) | EMMC_CMD_RESP_R6 | 0x00010000U)
+#define EMMC_CMD_CARD_SELECT    ((7U << EMMC_CMD_INDEX_SHIFT) | EMMC_CMD_RESP_R1 | 0x00010000U)
+#define EMMC_CMD_SEND_CSD       ((9U << EMMC_CMD_INDEX_SHIFT) | EMMC_CMD_RESP_R2)
+#define EMMC_CMD_READ_SINGLE    ((17U << EMMC_CMD_INDEX_SHIFT) | EMMC_CMD_RESP_R1 | 0x00220020U)
+#define EMMC_CMD_READ_MULTI     ((18U << EMMC_CMD_INDEX_SHIFT) | EMMC_CMD_RESP_R1 | 0x00220020U)
+#define EMMC_CMD_WRITE_SINGLE   ((24U << EMMC_CMD_INDEX_SHIFT) | EMMC_CMD_RESP_R1 | 0x00220000U)
+#define EMMC_CMD_WRITE_MULTI    ((25U << EMMC_CMD_INDEX_SHIFT) | EMMC_CMD_RESP_R1 | 0x00220000U)
+#define EMMC_CMD_APP_CMD        ((55U << EMMC_CMD_INDEX_SHIFT) | EMMC_CMD_RESP_R1)
 
 #define EMMC_ACMD_SD_SEND_OP    0x02020000U
 #define EMMC_ACMD_SET_BUS_WIDTH 0x06020000U
@@ -187,14 +189,10 @@ int emmc_read_sector(emmc_device_t *dev, uint32_t lba, uint32_t count, void *buf
         return -1;
     }
 
-    *blksz = EMMC_BLKSZ_REG;
+    *blksz = EMMC_BLOCK_SIZE;
     emmc_barrier();
 
-    uint32_t cmd = EMMC_CMD_READ_SINGLE | EMMC_CMD_RESP_R1 | EMMC_CMD_NORMAL;
-    cmd |= (24U << EMMC_CMD_INDEX_SHIFT);
-    cmd |= EMMC_CMD_RESP_R1;
-
-    if (emmc_send_command(dev, cmd, lba) != 0) {
+    if (emmc_send_command(dev, EMMC_CMD_READ_SINGLE, lba) != 0) {
         return -2;
     }
 
@@ -203,9 +201,9 @@ int emmc_read_sector(emmc_device_t *dev, uint32_t lba, uint32_t count, void *buf
             return -3;
         }
 
-        for (uint32_t word = 0; word < EMMC_BLKSZ / 4; word++) {
+        for (uint32_t word = 0; word < EMMC_BLOCK_SIZE / 4; word++) {
             emmc_barrier();
-            buf[sector * (EMMC_BLKSZ_REG / 4) + word] = *data;
+            buf[sector * (EMMC_BLOCK_SIZE / 4) + word] = *data;
         }
     }
 
@@ -221,13 +219,10 @@ int emmc_write_sector(emmc_device_t *dev, uint32_t lba, uint32_t count, const vo
         return -1;
     }
 
-    *blksz = EMMC_BLKSZ_REG;
+    *blksz = EMMC_BLOCK_SIZE;
     emmc_barrier();
 
-    uint32_t cmd = EMMC_CMD_WRITE_SINGLE | EMMC_CMD_RESP_R1 | EMMC_CMD_NORMAL;
-    cmd |= (25U << EMMC_CMD_INDEX_SHIFT);
-
-    if (emmc_send_command(dev, cmd, lba) != 0) {
+    if (emmc_send_command(dev, EMMC_CMD_WRITE_SINGLE, lba) != 0) {
         return -2;
     }
 
@@ -236,8 +231,8 @@ int emmc_write_sector(emmc_device_t *dev, uint32_t lba, uint32_t count, const vo
             return -3;
         }
 
-        for (uint32_t word = 0; word < EMMC_BLKSZ / 4; word++) {
-            *data = buf[sector * (EMMC_BLKSZ / 4) + word];
+        for (uint32_t word = 0; word < EMMC_BLOCK_SIZE / 4; word++) {
+            *data = buf[sector * (EMMC_BLOCK_SIZE / 4) + word];
             emmc_barrier();
         }
     }

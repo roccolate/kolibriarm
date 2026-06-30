@@ -267,6 +267,12 @@ int vmm_unmap_page(uint64_t *pgd, uint64_t vaddr) {
 
     level3[index3] = 0;
 
+#if defined(__aarch64__) && !defined(ARMONIOS_TEST)
+    __asm__ volatile("tlbi vale1is, %0" :: "r"(vaddr >> 12));
+    __asm__ volatile("dsb sy");
+    __asm__ volatile("isb");
+#endif
+
     return 0;
 }
 
