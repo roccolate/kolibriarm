@@ -17,6 +17,7 @@ void kernel_on_timer_tick(void);
 
 static uint64_t g_ticks;
 static uint64_t g_interval_ticks;
+static uint64_t g_next_cval;
 
 static uint64_t read_cntfrq(void) {
     uint64_t value;
@@ -25,8 +26,15 @@ static uint64_t read_cntfrq(void) {
     return value;
 }
 
-static void write_cntp_tval(uint64_t value) {
-    __asm__ volatile("msr cntp_tval_el0, %0" :: "r"(value));
+static uint64_t read_cntpct(void) {
+    uint64_t value;
+
+    __asm__ volatile("mrs %0, cntpct_el0" : "=r"(value));
+    return value;
+}
+
+static void write_cntp_cval(uint64_t value) {
+    __asm__ volatile("msr cntp_cval_el0, %0" :: "r"(value));
 }
 
 static void write_cntp_ctl(uint64_t value) {
@@ -45,14 +53,21 @@ void timer_init(uint32_t hz) {
         g_interval_ticks = 1;
     }
 
-    write_cntp_tval(g_interval_ticks);
+    g_next_cval = read_cntpct() + g_interval_ticks;
+    write_cntp_cval(g_next_cval);
     write_cntp_ctl(1);
 }
 
 void timer_handle_irq(void *context) {
     (void)context;
     g_ticks++;
-    write_cntp_tval(g_interval_ticks);
+
+    /* Advance CVAL by the fixed interval so ticks are anchored to the
+     * previous expiry, not the moment we service the IRQ.  This eliminates
+     * cumulative drift that TVAL reloads cause. */
+    g_next_cval += g_interval_ticks;
+    write_cntp_cval(g_next_cval);
+
     uart_pump_input();
     kernel_on_timer_tick();
     sched_on_timer_tick();
