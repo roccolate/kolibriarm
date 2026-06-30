@@ -108,6 +108,10 @@ uint8_t usb_hid_keyboard_report(usb_hid_device_t *dev,
         return 0;
     }
     uint8_t produced = 0;
+    /* Check if either Shift key is held via the modifier byte. */
+    uint8_t shifted = (report->modifiers & (HID_MOD_LSHIFT | HID_MOD_RSHIFT))
+                          ? 1U
+                          : 0U;
     /*
      * Releases are debounced by one empty report. QEMU's usb-kbd can present
      * very short empty gaps while the host is still repeating a held key; if we
@@ -129,7 +133,7 @@ uint8_t usb_hid_keyboard_report(usb_hid_device_t *dev,
         }
 
         out[produced].type = INPUT_EVENT_KEY_RELEASE;
-        out[produced].data.key.key = hid_usage_to_ascii(prev, 0);
+        out[produced].data.key.key = hid_usage_to_ascii(prev, shifted);
         produced++;
         dev->prev_keys[i] = HID_KEY_NONE;
         dev->release_pending[i] = 0;
@@ -156,7 +160,7 @@ uint8_t usb_hid_keyboard_report(usb_hid_device_t *dev,
         dev->prev_keys[(uint8_t)slot] = cur;
         dev->release_pending[(uint8_t)slot] = 0;
         out[produced].type = INPUT_EVENT_KEY_PRESS;
-        out[produced].data.key.key = hid_usage_to_ascii(cur, 0);
+        out[produced].data.key.key = hid_usage_to_ascii(cur, shifted);
         produced++;
         if (produced >= out_len) {
             return produced;
