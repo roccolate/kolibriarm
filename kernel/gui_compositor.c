@@ -532,8 +532,16 @@ void gui_draw(gui_desktop_t *desktop) {
             if (wi == GUI_MAX_WINDOWS) {
                 break;
             }
-            gui_draw_window(desktop->fb, desktop, wi, &desktop->windows[wi]);
-            last_z = desktop->windows[wi].z;
+            const gui_window_t *win = &desktop->windows[wi];
+            /* Skip windows whose bounding box doesn't overlap this
+             * damage rect — avoids unnecessary redraws. */
+            if ((int32_t)(win->x + win->w) > x0 &&
+                (int32_t)win->x < x1 &&
+                (int32_t)(win->y + win->h) > y0 &&
+                (int32_t)win->y < y1) {
+                gui_draw_window(desktop->fb, desktop, wi, win);
+            }
+            last_z = win->z;
         }
         if (desktop->cursor.visible) {
             int32_t cx0 = desktop->cursor.x;
