@@ -136,6 +136,7 @@ OBJS := \
     $(BUILD_DIR)/kernel/irq.o \
     $(BUILD_DIR)/kernel/irq_asm.o \
     $(BUILD_DIR)/kernel/kernel.o \
+    $(BUILD_DIR)/kernel/kstring.o \
     $(BUILD_DIR)/kernel/mm/kheap.o \
     $(BUILD_DIR)/kernel/mm/mmu.o \
     $(BUILD_DIR)/kernel/mm/pmm.o \

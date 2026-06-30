@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 #include "kernel/boot_program.h"
+#include "kernel/kstring.h"
 #include "kernel/vfs.h"
 
 /*
@@ -36,22 +37,6 @@ _Static_assert(BOOTFS_ENTRY_COUNT <= VFS_MAX_NODES,
 static bootfs_file_t g_found_files[BOOTFS_ENTRY_COUNT];
 static vfs_node_t g_bootfs_vfs_nodes[BOOTFS_ENTRY_COUNT];
 
-static int bootfs_name_equals(const char *left, const char *right) {
-    if (left == 0 || right == 0) {
-        return 0;
-    }
-
-    while (*left != '\0' && *right != '\0') {
-        if (*left != *right) {
-            return 0;
-        }
-        left++;
-        right++;
-    }
-
-    return *left == *right;
-}
-
 static int bootfs_vfs_read(void *context, uint64_t offset, uint8_t *buffer,
                            uint64_t capacity, uint64_t *bytes_read) {
     const char *name = (const char *)context;
@@ -71,7 +56,7 @@ const bootfs_file_t *bootfs_find(const char *name) {
     }
 
     for (uint32_t i = 0; i < BOOTFS_ENTRY_COUNT; i++) {
-        if (bootfs_name_equals(program->name, g_bootfs_entries[i].name)) {
+        if (kstreq(program->name, g_bootfs_entries[i].name)) {
             bootfs_file_t *file = &g_found_files[i];
 
             file->name = program->name;

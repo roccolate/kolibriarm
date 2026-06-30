@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 
+#include "kernel/kstring.h"
 #include "kernel/user_image_format.h"
 
 /*
@@ -71,22 +72,6 @@ static const boot_program_source_t g_boot_programs[] = {
 static boot_program_t g_found_programs[
     sizeof(g_boot_programs) / sizeof(g_boot_programs[0])];
 
-static int boot_program_name_equals(const char *left, const char *right) {
-    if (left == 0 || right == 0) {
-        return 0;
-    }
-
-    while (*left != '\0' && *right != '\0') {
-        if (*left != *right) {
-            return 0;
-        }
-        left++;
-        right++;
-    }
-
-    return *left == *right;
-}
-
 static int boot_program_source_is_kli1(const boot_program_source_t *program,
                                        uint64_t *out_size) {
     uintptr_t start;
@@ -144,7 +129,7 @@ const boot_program_t *boot_program_find(const char *name) {
         const boot_program_source_t *program = &g_boot_programs[i];
         uint64_t size;
 
-        if (boot_program_name_equals(program->name, name) &&
+        if (kstreq(program->name, name) &&
             boot_program_source_is_kli1(program, &size)) {
             boot_program_t *found = &g_found_programs[i];
 
