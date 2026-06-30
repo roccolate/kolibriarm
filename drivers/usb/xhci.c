@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 #include "kernel/kernel_compiler.h"
+#include "kernel/kstring.h"
 #include "kernel/mm/pmm.h"
 #include "usb/usb.h"
 
@@ -170,20 +171,6 @@ static void xhci_sync(void) {
 #endif
 }
 
-static void zero_bytes(void *ptr, uint32_t count) {
-    uint8_t *p = (uint8_t *)ptr;
-    for (uint32_t i = 0; i < count; i++) {
-        p[i] = 0;
-    }
-}
-
-static void copy_bytes(void *dst, const void *src, uint32_t count) {
-    uint8_t *d = (uint8_t *)dst;
-    const uint8_t *s = (const uint8_t *)src;
-    for (uint32_t i = 0; i < count; i++) {
-        d[i] = s[i];
-    }
-}
 
 static uint32_t trb_type(uint32_t type) {
     return type << XHCI_TRB_TYPE_SHIFT;
@@ -212,7 +199,7 @@ static void trb_set(xhci_trb_t *trb, uint64_t parameter,
 
 static void ring_init(xhci_ring_t *ring, xhci_trb_t *storage,
                       uint32_t size) {
-    zero_bytes(storage, size * (uint32_t)sizeof(xhci_trb_t));
+    kmemzero(storage, size * (uint32_t)sizeof(xhci_trb_t));
     ring->trbs = storage;
     ring->size = size;
     ring->enqueue = 0;
@@ -584,7 +571,7 @@ static int setup_scratchpads(xhci_controller_t *ctrl, uint8_t count) {
         if (page == 0) {
             return -1;
         }
-        zero_bytes((void *)(uintptr_t)page, (uint32_t)PAGE_SIZE);
+        kmemzero((void *)(uintptr_t)page, (uint32_t)PAGE_SIZE);
         priv->scratchpad_ptrs[i] = page;
     }
     priv->dcbaa[0] = dma_addr(priv->scratchpad_ptrs);
@@ -622,7 +609,7 @@ int xhci_init(xhci_controller_t *ctrl) {
     ctrl->ep0_max_packet = 8;
 
     xhci_priv_t *priv = &g_priv[ctrl->priv_index];
-    zero_bytes(priv, sizeof(*priv));
+    kmemzero(priv, sizeof(*priv));
 
     uint32_t cmd = xhci_read32(ctrl->op_base, XHCI_OP_USBCMD);
     if ((cmd & XHCI_CMD_RS) != 0U) {
@@ -845,14 +832,14 @@ int xhci_address_device(xhci_controller_t *ctrl, uint8_t port_index,
     dev.slot_id = slot_id;
 
     xhci_priv_t *priv = &g_priv[ctrl->priv_index];
-    zero_bytes(priv->input_context, sizeof(priv->input_context));
-    zero_bytes(priv->device_context[dev.index],
+    kmemzero(priv->input_context, sizeof(priv->input_context));
+    kmemzero(priv->device_context[dev.index],
                sizeof(priv->device_context[dev.index]));
-    zero_bytes(priv->endpoint_configured[dev.index],
+    kmemzero(priv->endpoint_configured[dev.index],
                sizeof(priv->endpoint_configured[dev.index]));
-    zero_bytes(priv->pending_intr_trb[dev.index],
+    kmemzero(priv->pending_intr_trb[dev.index],
                sizeof(priv->pending_intr_trb[dev.index]));
-    zero_bytes(priv->pending_intr_len[dev.index],
+    kmemzero(priv->pending_intr_len[dev.index],
                sizeof(priv->pending_intr_len[dev.index]));
     ring_init(&priv->endpoint[dev.index][1],
               priv->transfer_ring[dev.index][1],
@@ -924,11 +911,11 @@ int xhci_control_transfer_device(xhci_device_t *dev,
 
     uint8_t is_in = (setup->bmRequestType & 0x80U) != 0U ? 1U : 0U;
     if (!is_in && data != 0 && data_size > 0U) {
-        copy_bytes(priv->control_buffer, data, data_size);
+        kmemcpy(priv->control_buffer, data, data_size);
     }
 
-    zero_bytes(priv->setup_buffer, sizeof(priv->setup_buffer));
-    copy_bytes(priv->setup_buffer, setup_buf, sizeof(usb_setup_t));
+    kmemzero(priv->setup_buffer, sizeof(priv->setup_buffer));
+    kmemcpy(priv->setup_buffer, setup_buf, sizeof(usb_setup_t));
 
     uint64_t setup_param = 0;
     for (uint8_t i = 0; i < sizeof(usb_setup_t); i++) {
@@ -977,7 +964,7 @@ int xhci_control_transfer_device(xhci_device_t *dev,
         if (actual > data_size) {
             actual = data_size;
         }
-        copy_bytes(data, priv->control_buffer, actual);
+        kmemcpy(data, priv->control_buffer, actual);
     }
 
     priv->in_control_xfer = 0;
@@ -1041,7 +1028,7 @@ static int configure_interrupt_endpoint(xhci_device_t *dev,
         max_packet = XHCI_INTR_BUF_SIZE;
     }
 
-    zero_bytes(priv->input_context, sizeof(priv->input_context));
+    kmemzero(priv->input_context, sizeof(priv->input_context));
     ring_init(&priv->endpoint[dev->index][dci],
               priv->transfer_ring[dev->index][dci],
               XHCI_TRANSFER_RING_SIZE);
@@ -1093,7 +1080,7 @@ int xhci_interrupt_in_device(xhci_device_t *dev, uint8_t endpoint,
     }
 
     if (priv->pending_intr_trb[dev->index][dci] == 0) {
-        zero_bytes(priv->interrupt_buffer[dev->index][dci],
+        kmemzero(priv->interrupt_buffer[dev->index][dci],
                    XHCI_INTR_BUF_SIZE);
         xhci_trb_t *trb = ring_push(&priv->endpoint[dev->index][dci],
                                     dma_addr(priv->interrupt_buffer
@@ -1128,7 +1115,7 @@ int xhci_interrupt_in_device(xhci_device_t *dev, uint8_t endpoint,
     if (actual > buf_size) {
         actual = buf_size;
     }
-    copy_bytes(buf, priv->interrupt_buffer[dev->index][dci], actual);
+    kmemcpy(buf, priv->interrupt_buffer[dev->index][dci], actual);
     return (int)actual;
 }
 

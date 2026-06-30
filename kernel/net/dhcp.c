@@ -10,6 +10,7 @@
 #include "drivers/board.h"
 #include "drivers/net/virtio_net.h"
 #include "drivers/uart/pl011.h"
+#include "kernel/kstring.h"
 #include "kernel/net/dhcp_options.h"
 #include "kernel/print.h"
 
@@ -32,32 +33,6 @@ static uint32_t g_dhcp_xid = 0x12345678;
 static uint8_t g_net_rx_frame[NET_FRAME_MAX] KERNEL_ALIGNED(8);
 static uint8_t g_net_tx_frame[NET_FRAME_MAX] KERNEL_ALIGNED(8);
 
-static void copy_bytes(void *dst, const void *src, uint32_t len) {
-    uint8_t *d = (uint8_t *)dst;
-    const uint8_t *s = (const uint8_t *)src;
-
-    for (uint32_t i = 0; i < len; i++) {
-        d[i] = s[i];
-    }
-}
-
-static int memcmp(const void *a, const void *b, uint32_t len) {
-    const uint8_t *p = (const uint8_t *)a;
-    const uint8_t *q = (const uint8_t *)b;
-    for (uint32_t i = 0; i < len; i++) {
-        if (p[i] != q[i]) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
-static void memset(void *dst, uint8_t val, uint32_t len) {
-    uint8_t *d = (uint8_t *)dst;
-    for (uint32_t i = 0; i < len; i++) {
-        d[i] = val;
-    }
-}
 
 static void set_ip_addr(uint8_t *addr, uint32_t ip) {
     addr[0] = ip & 0xFF;
@@ -124,8 +99,8 @@ static void write_eth_header(uint8_t *frame, uint16_t eth_type) {
         0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
     };
 
-    copy_bytes(frame, broadcast, sizeof(broadcast));
-    copy_bytes(frame + 6, g_net_dev.mac, 6);
+    kmemcpy(frame, broadcast, sizeof(broadcast));
+    kmemcpy(frame + 6, g_net_dev.mac, 6);
 
     frame[12] = (eth_type >> 8) & 0xFF;
     frame[13] = eth_type & 0xFF;
@@ -135,7 +110,7 @@ static void write_ipv4_header(uint8_t *packet, uint32_t payload_len,
                               uint32_t dest_ip, uint8_t proto) {
     uint32_t total_len = IPV4_HEADER_LEN + payload_len;
 
-    memset(packet, 0, IPV4_HEADER_LEN);
+    kmemset(packet, 0, IPV4_HEADER_LEN);
     packet[0] = 0x45;
     packet[1] = 0;
     put_be16(&packet[2], (uint16_t)total_len);
@@ -193,16 +168,16 @@ static void send_dhcp_discover(void) {
     static const uint8_t options[4] = {0x63, 0x82, 0x53, 0x63};
     int status;
 
-    memset(pkt, 0, sizeof(*pkt));
+    kmemset(pkt, 0, sizeof(*pkt));
     pkt->op = 1;
     pkt->htype = 1;
     pkt->hlen = 6;
     pkt->xid = g_dhcp_xid;
     set_dhcp_broadcast_flag(pkt);
 
-    copy_bytes(pkt->chaddr, g_net_dev.mac, 6);
+    kmemcpy(pkt->chaddr, g_net_dev.mac, 6);
 
-    copy_bytes(pkt->options, options, sizeof(options));
+    kmemcpy(pkt->options, options, sizeof(options));
     pkt->options[4] = 53;
     pkt->options[5] = 1;
     pkt->options[6] = DHCP_DISCOVER;
@@ -223,7 +198,7 @@ static void send_dhcp_request(uint32_t server_ip, uint32_t requested_ip) {
     uint8_t opt_idx = 4;
     int status;
 
-    memset(pkt, 0, sizeof(*pkt));
+    kmemset(pkt, 0, sizeof(*pkt));
     pkt->op = 1;
     pkt->htype = 1;
     pkt->hlen = 6;
@@ -231,9 +206,9 @@ static void send_dhcp_request(uint32_t server_ip, uint32_t requested_ip) {
     set_dhcp_broadcast_flag(pkt);
 
     set_ip_addr(pkt->ciaddr, requested_ip);
-    copy_bytes(pkt->chaddr, g_net_dev.mac, 6);
+    kmemcpy(pkt->chaddr, g_net_dev.mac, 6);
 
-    copy_bytes(pkt->options, options, sizeof(options));
+    kmemcpy(pkt->options, options, sizeof(options));
 
     pkt->options[opt_idx++] = 53;
     pkt->options[opt_idx++] = 1;
@@ -370,8 +345,8 @@ static void parse_eth_frame(uint8_t *data, uint32_t len) {
         return;
     }
 
-    if (memcmp(data, g_net_dev.mac, 6) != 0 &&
-        memcmp(data, "\xFF\xFF\xFF\xFF\xFF\xFF", 6) != 0) {
+    if (kmemcmp(data, g_net_dev.mac, 6) != 0 &&
+        kmemcmp(data, "\xFF\xFF\xFF\xFF\xFF\xFF", 6) != 0) {
         return;
     }
 
@@ -417,7 +392,7 @@ int net_init(void) {
     g_net_info.gateway = 0;
     g_net_info.dns = 0;
     g_net_info.dhcp_server = 0;
-    copy_bytes(g_net_info.mac, net_info.mac, 6);
+    kmemcpy(g_net_info.mac, net_info.mac, 6);
 
     g_net_inited = 1;
 

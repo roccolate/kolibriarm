@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include "kernel/kernel_compiler.h"
+#include "kernel/kstring.h"
 
 #define VIRTIO_MMIO_MAGIC_VALUE 0x000
 #define VIRTIO_MMIO_VERSION     0x004
@@ -108,13 +109,6 @@ static void virtio_barrier(void) {
 #endif
 }
 
-static void copy_bytes(void *dst, const void *src, uint32_t len) {
-    uint8_t *d = (uint8_t *)dst;
-    const uint8_t *s = (const uint8_t *)src;
-    for (uint32_t i = 0; i < len; i++) {
-        d[i] = s[i];
-    }
-}
 
 static int virtio_net_device_ready(const virtio_net_device_t *device) {
     return device != NULL && device->ready != 0 && device->base != 0 &&
@@ -302,7 +296,7 @@ int virtio_net_send(virtio_net_device_t *device, const void *data, uint32_t len)
     for (uint32_t i = 0; i < VIRTIO_NET_HDR_SIZE; i++) {
         g_tx_buf[i] = 0;
     }
-    copy_bytes(g_tx_buf + VIRTIO_NET_HDR_SIZE, data, len);
+    kmemcpy(g_tx_buf + VIRTIO_NET_HDR_SIZE, data, len);
 
     g_tx_desc[desc_idx].addr = (uint64_t)(uintptr_t)g_tx_buf;
     g_tx_desc[desc_idx].len = VIRTIO_NET_HDR_SIZE + len;
@@ -361,7 +355,7 @@ int virtio_net_recv(virtio_net_device_t *device, void *data, uint32_t max_len) {
     }
 
     if (copy_len > 0) {
-        copy_bytes(data, g_rx_buf[desc_idx] + VIRTIO_NET_HDR_SIZE, copy_len);
+        kmemcpy(data, g_rx_buf[desc_idx] + VIRTIO_NET_HDR_SIZE, copy_len);
     }
 
     g_rx_desc[desc_idx].addr = (uint64_t)(uintptr_t)g_rx_buf[desc_idx];
