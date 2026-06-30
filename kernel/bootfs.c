@@ -39,13 +39,27 @@ static vfs_node_t g_bootfs_vfs_nodes[BOOTFS_ENTRY_COUNT];
 
 static int bootfs_vfs_read(void *context, uint64_t offset, uint8_t *buffer,
                            uint64_t capacity, uint64_t *bytes_read) {
-    const char *name = (const char *)context;
+    const bootfs_file_t *file = (const bootfs_file_t *)context;
+    uint64_t available;
+    uint64_t count;
 
-    if (name == 0) {
+    if (bytes_read != 0) {
+        *bytes_read = 0;
+    }
+
+    if (file == 0 || buffer == 0 || bytes_read == 0 || offset > file->size) {
         return -1;
     }
 
-    return bootfs_read(name, offset, buffer, capacity, bytes_read);
+    available = file->size - offset;
+    count = capacity;
+    if (count > available) {
+        count = available;
+    }
+
+    kmemcpy(buffer, file->data + offset, (uint32_t)count);
+    *bytes_read = count;
+    return 0;
 }
 
 const bootfs_file_t *bootfs_find(const char *name) {
@@ -89,9 +103,7 @@ int bootfs_read(const char *name, uint64_t offset, uint8_t *buffer,
         count = available;
     }
 
-    for (uint64_t i = 0; i < count; i++) {
-        buffer[i] = file->data[offset + i];
-    }
+    kmemcpy(buffer, file->data + offset, (uint32_t)count);
 
     *bytes_read = count;
     return 0;
@@ -126,7 +138,7 @@ int bootfs_mount_vfs(void) {
         node->path = g_bootfs_entries[i].path;
         node->size = file->size;
         node->read = bootfs_vfs_read;
-        node->context = (void *)file->name;
+        node->context = (void *)file;
         mounted++;
     }
 
