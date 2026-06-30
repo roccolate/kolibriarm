@@ -233,6 +233,13 @@ void sched_thread_exit(void) {
 
     next_thread = next_runnable_thread();
     if (next_thread == 0) {
+        /* Free stack before idling — this thread will never run again. */
+        if (old_thread->stack_base != 0) {
+            for (uint64_t i = 0; i < SCHED_STACK_PAGES; i++) {
+                pmm_free_page(old_thread->stack_base + i * PAGE_SIZE);
+            }
+            old_thread->stack_base = 0;
+        }
         uart_puts("SCHED idle: no runnable threads\n");
         irq_enable();
         for (;;) {
@@ -242,6 +249,19 @@ void sched_thread_exit(void) {
 
     next_thread->state = THREAD_RUNNING;
     g_current_thread = next_thread;
+
+    /*
+     * Free the exiting thread's stack pages.  IRQs are disabled and
+     * switch_context will atomically swap SP to next_thread's stack,
+     * so the few instructions between here and the SP swap are safe.
+     */
+    if (old_thread->stack_base != 0) {
+        for (uint64_t i = 0; i < SCHED_STACK_PAGES; i++) {
+            pmm_free_page(old_thread->stack_base + i * PAGE_SIZE);
+        }
+        old_thread->stack_base = 0;
+    }
+
     switch_context(&old_thread->context, &next_thread->context);
 
     for (;;) {
